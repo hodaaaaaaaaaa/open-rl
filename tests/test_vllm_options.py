@@ -46,3 +46,11 @@ class GpuMemoryUtilizationTest(unittest.TestCase):
   def test_without_a_budget_the_default_holds(self) -> None:
     with patch.dict(os.environ, {}, clear=True):
       self.assertEqual(gpu_memory_utilization(), 0.90)
+
+  def test_headroom_comes_off_vllms_share(self) -> None:
+    # 12 GiB of weight update staging on an 80 GiB device leaves vLLM 0.75.
+    with patch.dict(os.environ, {}, clear=True):
+      self.assertEqual(gpu_memory_utilization(headroom_bytes=12 * 1024**3, device_memory_bytes=80 * 1024**3), 0.75)
+      self.assertEqual(gpu_memory_utilization(headroom_bytes=12 * 1024**3, device_memory_bytes=0), 0.90)
+    with patch.dict(os.environ, {"VLLM_GPU_MEMORY_UTILIZATION": "0.5"}):
+      self.assertEqual(gpu_memory_utilization(headroom_bytes=12 * 1024**3, device_memory_bytes=80 * 1024**3), 0.5)

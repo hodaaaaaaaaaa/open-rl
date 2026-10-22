@@ -2,7 +2,16 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from server.estimator import GIB, MODEL_TO_KV_BYTES_PER_TOKEN, SAMPLER_KV_TOKENS, footprint, normalize_model_id, parameter_count
+from server.estimator import (
+  GIB,
+  MODEL_TO_KV_BYTES_PER_TOKEN,
+  SAMPLER_KV_TOKENS,
+  footprint,
+  normalize_model_id,
+  parameter_count,
+  sampler_device_bytes,
+  weight_update_bytes,
+)
 
 
 def kv_cache_bytes(model: str) -> int:
@@ -34,6 +43,20 @@ class FootprintTest(unittest.TestCase):
       fp = footprint(model, "lora", "sampler")
       predicted_kv = kv_cache_bytes(model) - (fp.accelerator_bytes - budget * GIB)
       self.assertAlmostEqual(predicted_kv / GIB, kv, delta=0.3, msg=model)
+
+  def test_fft_sampler_claims_room_for_its_weight_update(self) -> None:
+    # gemma-4-e2b's update stages its 4.38 GiB per-layer embedding densely,
+    # ~11 GiB at the peak. Sized without it the sampler landed on an L4 and
+    # died at its first update; with it, it needs the 80GB tier. LoRA samplers
+    # never update base weights and claim nothing for it.
+    self.assertGreater(weight_update_bytes("google/gemma-4-E2B-it"), 11 * GIB)
+    gemma = footprint("google/gemma-4-E2B-it", "full", "sampler").accelerator_bytes
+    self.assertGreater(gemma, 22 * GIB)
+    self.assertLess(gemma, 79 * GIB)
+    params, kv = parameter_count("Qwen/Qwen3-0.6B"), MODEL_TO_KV_BYTES_PER_TOKEN["qwen3-0.6b"]
+    full = sampler_device_bytes(params, kv, "full") + weight_update_bytes("Qwen/Qwen3-0.6B")
+    self.assertEqual(footprint("Qwen/Qwen3-0.6B", "full", "sampler").accelerator_bytes, full)
+    self.assertEqual(footprint("Qwen/Qwen3-0.6B", "lora", "sampler").accelerator_bytes, sampler_device_bytes(params, kv, "lora"))
 
   def test_sampler_kv_cache_grows_with_the_model(self) -> None:
     # An 8B LoRA sampler sized at 22Gi landed on an L4 with 0.23 GiB of KV

@@ -38,8 +38,8 @@ def split_stop(stop: str | Sequence[str] | Sequence[int] | None) -> tuple[list[s
   return (strings or None), (token_ids or None)
 
 
-def gpu_memory_utilization() -> float:
-  """vLLM's share of the device: an explicit VLLM_GPU_MEMORY_UTILIZATION, else 0.90.
+def gpu_memory_utilization(headroom_bytes: int = 0, device_memory_bytes: int | None = None) -> float:
+  """vLLM's share of the device: an explicit VLLM_GPU_MEMORY_UTILIZATION, else 0.90 less headroom_bytes.
 
   OPEN_RL_ACCELERATOR_MEMORY is deliberately not consulted. It is the placement
   claim the scheduler sized this worker for, not a runtime cap: workers that
@@ -47,11 +47,20 @@ def gpu_memory_utilization() -> float:
   use all of it. Sizing vLLM from the claim starved the sampler of KV cache on
   large devices and made Gemma-4's first engine init fail when the cold
   torch.compile transient did not fit in the claim.
+
+  headroom_bytes is memory a later transient needs that vLLM's profiling never
+  sees, such as the staging of an FFT sampler's weight update.
   """
   explicit = os.getenv("VLLM_GPU_MEMORY_UTILIZATION")
   if explicit:
     return float(explicit)
-  return 0.90
+  if headroom_bytes <= 0:
+    return 0.90
+  if device_memory_bytes is None:
+    device_memory_bytes = detected_device_memory_bytes()
+  if device_memory_bytes <= 0:
+    return 0.90
+  return round(0.90 - headroom_bytes / device_memory_bytes, 4)
 
 
 def sampler_batch_limits(device_memory_bytes: int | None = None) -> dict[str, int]:

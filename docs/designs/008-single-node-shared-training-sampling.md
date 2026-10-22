@@ -154,8 +154,9 @@ To ensure instantaneous turn switching without re-reading weights from storage d
    - Utilizes vLLM native `sleep(level=1)` API:
      - Offloads base model weights to CPU memory.
      - Destroys active KV cache memory pools.
-   - Upon `wake_up(tags=["weights", "kv_cache"])`:
-     - Restores weights and re-initializes KV cache allocation.
+   - Upon `wake_up(tags=["weights"])`:
+     - Restores weights. Any weight update runs next, while the KV cache is still freed, so the update's dense staging has that memory.
+   - Then `wake_up(tags=["kv_cache"])` re-initializes the KV cache allocation before generation.
 
 ### 5.2 Single-GPU Memory Budget Breakdown (Example: Qwen2.5-0.5B on 24GB NVIDIA L4)
 

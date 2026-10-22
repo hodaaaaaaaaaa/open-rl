@@ -9,7 +9,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from accel_timeslicer.workload import WorkloadRef
-from server.vllm_sampler import SHUTDOWN_SENTINEL, Sampler, process_batch, serve, serve_time_sliced
+from server.estimator import weight_update_bytes
+from server.vllm_sampler import SHUTDOWN_SENTINEL, Sampler, engine_kwargs_from_env, process_batch, serve, serve_time_sliced
 
 
 def make_engine(on_generate=None):
@@ -71,6 +72,23 @@ class SamplerBatchTest(unittest.IsolatedAsyncioTestCase):
     self.engine.sleep.assert_not_called()
     self.engine.wake_up.assert_not_called()
 
+  async def test_kv_cache_wakes_after_the_weight_update(self):
+    # The update's dense staging uses the memory the parked KV cache frees.
+    seen = []
+    self.engine.wake_up.side_effect = lambda tags: seen.append(("wake", tuple(tags)))
+    self.engine.update_weights.side_effect = lambda req: seen.append(("update", req.update_info["target_weights_path"]))
+    await self.sampler.sleep()
+    await self.sampler.wake()
+    await process_batch(self.sampler, self.store, [{"request_id": "1", "weights_path": "a"}])
+    self.assertEqual(seen, [("wake", ("weights",)), ("update", "a"), ("wake", ("kv_cache",))])
+    await process_batch(self.sampler, self.store, [{"request_id": "2", "weights_path": "a"}])
+    self.assertEqual(len(seen), 3)
+    # With no update to do the KV cache still comes back after a wake.
+    await self.sampler.sleep()
+    await self.sampler.wake()
+    await process_batch(self.sampler, self.store, [{"request_id": "3", "weights_path": "a"}])
+    self.assertEqual(seen[3:], [("wake", ("weights",)), ("wake", ("kv_cache",))])
+
   async def test_failed_update_poisons_sampler_without_committing(self):
     self.engine.update_weights.side_effect = RuntimeError("invalid patch")
     await process_batch(self.sampler, self.store, [{"request_id": "bad", "weights_path": "a"}])
@@ -120,6 +138,19 @@ class SamplerBatchTest(unittest.IsolatedAsyncioTestCase):
     self.engine.update_weights.assert_not_called()
 
 
+class EngineKwargsTest(unittest.TestCase):
+  def test_only_an_unparked_fft_sampler_leaves_room_for_weight_updates(self):
+    device = 80 * 1024**3
+    with (
+      patch.dict(os.environ, {"BASE_MODEL": "google/gemma-4-E2B-it"}, clear=True),
+      patch("server.vllm_options.detected_device_memory_bytes", return_value=device),
+    ):
+      exclusive = engine_kwargs_from_env(fft_enabled=True, time_sliced=False)["gpu_memory_utilization"]
+      self.assertAlmostEqual(exclusive, 0.90 - weight_update_bytes("gemma-4-e2b") / device, places=3)
+      self.assertEqual(engine_kwargs_from_env(fft_enabled=True, time_sliced=True)["gpu_memory_utilization"], 0.90)
+      self.assertEqual(engine_kwargs_from_env(fft_enabled=False)["gpu_memory_utilization"], 0.90)
+
+
 class SamplerLifecycleTest(unittest.IsolatedAsyncioTestCase):
   async def asyncSetUp(self):
     self.events = []
@@ -157,7 +188,7 @@ class SamplerLifecycleTest(unittest.IsolatedAsyncioTestCase):
     await serve_time_sliced("test", self.store, self.factory)
     self.assertEqual(self.events, ["acquire", "create", "release", "acquire", "release"])
     self.assertEqual(self.engine.sleep.await_count, 2)
-    self.engine.wake_up.assert_awaited_once()
+    self.assertEqual([c.kwargs["tags"] for c in self.engine.wake_up.await_args_list], [["weights"], ["kv_cache"]])
     self.engine.shutdown.assert_called_once()
     self.slicer.register.assert_awaited_once_with(self.workload)
     self.slicer.unregister.assert_awaited_once_with(self.workload)
@@ -245,7 +276,7 @@ class SamplerLifecycleTest(unittest.IsolatedAsyncioTestCase):
       [{"request_id": "1"}],
       [{"request_id": "2"}, {"request_id": SHUTDOWN_SENTINEL}],
     ]
-    self.engine.wake_up.side_effect = [RuntimeError("wake failed"), None]
+    self.engine.wake_up.side_effect = [RuntimeError("wake failed"), None, None]
     await serve_time_sliced("test", self.store, self.factory)
     self.assertIn("wake failed", self.results()["1"]["error_message"])
     self.assertEqual(self.results()["2"]["type"], "sample")

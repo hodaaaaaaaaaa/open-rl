@@ -25,6 +25,7 @@ from vllm.sampling_params import RequestOutputKind
 
 from accel_timeslicer.time_slicer import TimeSlicerClient, time_slicer_client_from_env, time_slicing_enabled, workload_from_env
 from accel_timeslicer.workload import SAMPLER_CLAIM, WorkloadRef, local_workload_name
+from server.estimator import weight_update_bytes
 from server.store import RequestStore, StateStore, get_state_store, get_store
 from server.vllm_options import gpu_memory_utilization, sampler_batch_limits, split_stop, text_only_engine_kwargs
 
@@ -39,7 +40,7 @@ def failed_response(message: str) -> dict[str, Any]:
   return {"type": "RequestFailedResponse", "error_message": message}
 
 
-def engine_kwargs_from_env(fft_enabled: bool) -> dict[str, Any]:
+def engine_kwargs_from_env(fft_enabled: bool, time_sliced: bool = False) -> dict[str, Any]:
   model_name = os.getenv("BASE_MODEL") or os.getenv("VLLM_MODEL")
   if not model_name:
     raise ValueError("BASE_MODEL or VLLM_MODEL is required")
@@ -49,7 +50,10 @@ def engine_kwargs_from_env(fft_enabled: bool) -> dict[str, Any]:
     "enable_lora": not fft_enabled,
     "max_model_len": int(os.getenv("VLLM_MAX_MODEL_LEN", "8192")),
     **sampler_batch_limits(),
-    "gpu_memory_utilization": gpu_memory_utilization(),
+    # An FFT sampler that is never parked keeps its KV cache through weight
+    # updates, so vLLM leaves room for the update's staging. A time-sliced one
+    # wakes its KV cache only after the update (Sampler.ensure_weights).
+    "gpu_memory_utilization": gpu_memory_utilization(weight_update_bytes(model_name) if fft_enabled and not time_sliced else 0),
     "enable_prefix_caching": False,
     "enforce_eager": os.getenv("VLLM_ENFORCE_EAGER", "0") == "1",
     **text_only_engine_kwargs(),
@@ -116,31 +120,39 @@ class Sampler:
     self.engine = engine
     self.weights_path: str | None = None
     self.update_failed = False
+    # A new engine is fully awake; sleep() parks the weights and the KV cache.
+    self.kv_cache_awake = True
 
   async def wake(self) -> None:
-    await self.engine.wake_up(tags=["weights", "kv_cache"])
+    """Bring back the weights only. ensure_weights wakes the KV cache after any
+    weight update, so the update's dense staging has that memory."""
+    await self.engine.wake_up(tags=["weights"])
+    self.kv_cache_awake = False
 
   async def sleep(self) -> None:
     await self.engine.sleep(level=1)
+    self.kv_cache_awake = False
 
   async def ensure_weights(self, weights_path: str | None) -> None:
-    """Make the engine hold weights_path; None keeps whatever it holds."""
+    """Make the engine hold weights_path and be ready to generate; None keeps whatever it holds."""
     if self.update_failed:
       raise RuntimeError("Weight update failed; restart the sampler before serving")
-    if weights_path is None or weights_path == self.weights_path:
-      return
-    # No finally/resume on failure: partially updated weights must not be served.
-    try:
-      await self.engine.pause_generation(mode="wait", clear_cache=True)
-      await self.engine.start_weight_update()
-      await self.engine.update_weights(WeightTransferUpdateRequest(update_info={"target_weights_path": weights_path}))
-      await self.engine.finish_weight_update(weight_version=weights_path)
-      await self.engine.reset_encoder_cache()
-      await self.engine.resume_generation()
-    except BaseException:
-      self.update_failed = True
-      raise
-    self.weights_path = weights_path
+    if weights_path is not None and weights_path != self.weights_path:
+      # No finally/resume on failure: partially updated weights must not be served.
+      try:
+        await self.engine.pause_generation(mode="wait", clear_cache=True)
+        await self.engine.start_weight_update()
+        await self.engine.update_weights(WeightTransferUpdateRequest(update_info={"target_weights_path": weights_path}))
+        await self.engine.finish_weight_update(weight_version=weights_path)
+        await self.engine.reset_encoder_cache()
+        await self.engine.resume_generation()
+      except BaseException:
+        self.update_failed = True
+        raise
+      self.weights_path = weights_path
+    if not self.kv_cache_awake:
+      await self.engine.wake_up(tags=["kv_cache"])
+      self.kv_cache_awake = True
 
   async def generate(self, request: dict[str, Any]) -> dict[str, Any]:
     request_id = request["request_id"]
@@ -351,7 +363,9 @@ async def serve_time_sliced(model_id: str, store: RequestStore, make_engine: Cal
 
 async def run_sampling_worker(model_id: str) -> None:
   fft_enabled = os.getenv("OPEN_RL_ENABLE_FFT", "").lower() == "true"
-  engine_kwargs = engine_kwargs_from_env(fft_enabled)
+  # An exclusive sampler is alone on its GPU, so it serves awake like a LoRA one.
+  time_sliced = fft_enabled and time_slicing_enabled()
+  engine_kwargs = engine_kwargs_from_env(fft_enabled, time_sliced)
 
   def make_engine() -> AsyncLLMEngine:
     return AsyncLLMEngine.from_engine_args(AsyncEngineArgs(**engine_kwargs))
@@ -367,8 +381,7 @@ async def run_sampling_worker(model_id: str) -> None:
         installed_signals.append(sig)
       except NotImplementedError:
         break
-    # An exclusive sampler is alone on its GPU, so it serves awake like a LoRA one.
-    if fft_enabled and time_slicing_enabled():
+    if time_sliced:
       await serve_time_sliced(model_id, get_store(), make_engine)
     else:
       await serve(model_id, get_store(), make_engine)
