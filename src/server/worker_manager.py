@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from accel_timeslicer.workload import SAMPLER_TIME_SLICE_GROUP, TRAINER_TIME_SLICE_GROUP, workload_job_id
-from server.estimator import footprint
+from server.estimator import footprint, pinned_accelerator_bytes
 from server.model_metadata import TrainingModelMetadata, decode_model_metadata
 from server.store import get_state_store
 
@@ -95,7 +95,7 @@ def worker_env(meta: TrainingModelMetadata, base_model: str, runtime: str, is_lo
     "OPEN_RL_FINE_TUNING_TYPE": "lora" if is_lora else "full",
     # The device budget this worker was sized for; a sampler derives its
     # vLLM fraction from it against the device it actually gets.
-    "OPEN_RL_ACCELERATOR_MEMORY": str(footprint(base_model, meta.fine_tuning_type, role).accelerator_bytes),
+    "OPEN_RL_ACCELERATOR_MEMORY": str(pinned_accelerator_bytes(footprint(base_model, meta.fine_tuning_type, role).accelerator_bytes, is_lora and meta.exclusive)),
   }
   env["OPEN_RL_WEIGHT_SYNC_STRATEGY"] = meta.weight_sync_config.strategy
   if role == "trainer":

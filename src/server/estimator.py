@@ -129,3 +129,8 @@ def footprint(base_model: str, fine_tuning_type: str, role: str) -> Footprint:
     device = sampler_device_bytes(params, MODEL_TO_KV_BYTES_PER_TOKEN[model], kind)
   host = params * HOST_BYTES_PER_PARAM[(kind, role)] + HOST_OVERHEAD_BYTES[role]
   return Footprint(device, host, int(host * HOST_LIMIT_FACTOR))
+
+
+def pinned_accelerator_bytes(device: int, exclusive_lora: bool) -> int:
+  """Test-only: claim more than an L4 holds for every worker but an exclusive LoRA job's, so only that job lands on L4."""
+  return device if exclusive_lora else max(device, 24 * GIB)

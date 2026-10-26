@@ -27,7 +27,7 @@ from typing import Any
 
 from kubernetes import client, config
 
-from server.estimator import Footprint, footprint
+from server.estimator import Footprint, footprint, pinned_accelerator_bytes
 from server.worker_manager import (
   FAILED,
   READY,
@@ -99,6 +99,7 @@ def describe_worker(model_id: str, role: str) -> Worker:
   exclusive = not meta.shares_gpu()
   devices = meta.trainer_gpus if role == "trainer" else 1
   size = footprint(base_model, meta.fine_tuning_type, role)
+  size = replace(size, accelerator_bytes=pinned_accelerator_bytes(size.accelerator_bytes, is_lora and meta.exclusive))
   # Each torchrun rank is its own process with its own host memory.
   size = replace(size, host_request_bytes=size.host_request_bytes * devices, host_limit_bytes=size.host_limit_bytes * devices)
   return Worker(role, runtime, base_model, is_lora, exclusive, meta, size, devices)
@@ -120,7 +121,7 @@ def pod_env(worker: Worker) -> list[dict[str, Any]]:
   }
   # MAX_JOBS caps FlashInfer's JIT build, which otherwise runs one ~3GB
   # compiler per core and blows through the pod's host memory limit.
-  for name in ("VLLM_GPU_MEMORY_UTILIZATION", "VLLM_MAX_MODEL_LEN", "VLLM_ENABLE_MULTIMODAL", "OPEN_RL_TRAIN_TOKEN_BUDGET", "MAX_JOBS"):
+  for name in ("VLLM_GPU_MEMORY_UTILIZATION", "VLLM_MAX_MODEL_LEN", "VLLM_ENABLE_MULTIMODAL", "OPEN_RL_TRAIN_TOKEN_BUDGET", "MAX_JOBS", "VLLM_MAX_LORAS"):
     if os.getenv(name):
       values[name] = os.environ[name]
   # vLLM keys its torch.compile artifacts by model, GPU type and engine config.
