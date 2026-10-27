@@ -210,6 +210,52 @@ class SamplerLifecycleTest(unittest.IsolatedAsyncioTestCase):
   def results(self):
     return {call.args[0]: call.args[1] for call in self.store.set_result.call_args_list}
 
+  def queue(self, *batches):
+    pending = list(batches)
+
+    async def pop(model_id):
+      await asyncio.sleep(0)
+      return pending.pop(0) if pending else []
+
+    self.store.get_sampling_requests_for_model.side_effect = pop
+
+  async def test_continuous_sampler_starts_requests_while_earlier_ones_run(self):
+    second_started = asyncio.Event()
+
+    async def generate(request_id):
+      if request_id == "1":
+        await second_started.wait()
+      else:
+        second_started.set()
+
+    self.engine.generate.side_effect = make_engine(generate).generate
+    self.queue([{"request_id": "1"}], [{"request_id": "2"}], [{"request_id": SHUTDOWN_SENTINEL}])
+    await asyncio.wait_for(serve("test", self.store, lambda: self.engine, continuous=True), timeout=5)
+    self.assertEqual(self.results()["1"]["type"], "sample")
+    self.assertEqual(self.results()["2"]["type"], "sample")
+    self.engine.shutdown.assert_called_once()
+
+  async def test_continuous_shutdown_waits_for_running_requests(self):
+    async def generate(request_id):
+      await asyncio.sleep(0.05)
+
+    self.engine.generate.side_effect = make_engine(generate).generate
+    self.queue([{"request_id": "1"}, {"request_id": SHUTDOWN_SENTINEL}])
+    await serve("test", self.store, lambda: self.engine, continuous=True)
+    self.assertEqual(self.results()["1"]["type"], "sample")
+
+  async def test_continuous_dead_engine_fails_running_requests_and_exits(self):
+    async def hang(request_id):
+      self.engine.errored = True
+      await asyncio.Event().wait()
+
+    self.engine.generate.side_effect = make_engine(hang).generate
+    self.queue([{"request_id": "1"}])
+    with self.assertRaisesRegex(RuntimeError, "engine is dead"):
+      await asyncio.wait_for(serve("test", self.store, lambda: self.engine, continuous=True), timeout=5)
+    self.assertIn("engine died", self.results()["1"]["error_message"])
+    self.engine.shutdown.assert_called_once()
+
   async def test_dead_engine_fails_hanging_requests_and_exits(self):
     async def hang(request_id):
       self.engine.errored = True
