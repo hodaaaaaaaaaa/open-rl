@@ -93,13 +93,15 @@ class _TokenizerStub:
 
 
 class _LogitModelStub:
+  training = False
+
   def __init__(self, vocab_size: int = 17):
     self.vocab_size = vocab_size
     self.calls = []
     self.config = types.SimpleNamespace(get_text_config=lambda: types.SimpleNamespace())
 
-  def train(self):
-    return None
+  def train(self, mode=True):
+    self.training = mode
 
   def __call__(self, input_tensor, attention_mask=None, **_kwargs):
     if attention_mask is not None:

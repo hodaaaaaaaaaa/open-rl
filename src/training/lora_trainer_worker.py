@@ -39,6 +39,13 @@ class LoraTrainingWorker(BaseTrainerWorker):
   def is_ready(self) -> bool:
     return self.base_model is not None
 
+  def activate(self, adapter_id: str) -> None:
+    """Make adapter_id the active adapter. set_adapter walks every LoRA module
+    for every loaded adapter, so on a shared runtime it is skipped when the
+    adapter is already active."""
+    if self.peft_model.active_adapter != adapter_id:
+      self.peft_model.set_adapter(adapter_id)
+
   def load_base_model(self, base_model_name: str) -> None:
     """Eagerly load the massive base model tensors into VRAM."""
     if self.base_model is not None and self.base_model_name == base_model_name:
@@ -165,7 +172,7 @@ class LoraTrainingWorker(BaseTrainerWorker):
       os.makedirs(save_path, exist_ok=True)
 
       # Save the adapter weights
-      self.peft_model.set_adapter(adapter_id)
+      self.activate(adapter_id)
       self.peft_model.save_pretrained(save_path, selected_adapters=[adapter_id])
 
       # Save minimal metadata
@@ -184,7 +191,7 @@ class LoraTrainingWorker(BaseTrainerWorker):
     """Save adapter weights (and optionally optimizer state) to a specific path."""
     assert self.peft_model is not None, "Model must be loaded first."
 
-    self.peft_model.set_adapter(model_id)
+    self.activate(model_id)
     os.makedirs(state_path, exist_ok=True)
     self.peft_model.save_pretrained(state_path, selected_adapters=[model_id])
 
@@ -278,7 +285,7 @@ class LoraTrainingWorker(BaseTrainerWorker):
   ) -> dict[str, Any]:
     assert self.peft_model is not None, "Model must be loaded first."
     if model_id:
-      self.peft_model.set_adapter(model_id)
+      self.activate(model_id)
     return super().forward_backward(self.peft_model, data, loss_fn, loss_config, forward_only=forward_only)
 
   def optim_step(self, adam_params: dict[str, Any], model_id: str) -> dict[str, Any]:
@@ -287,7 +294,7 @@ class LoraTrainingWorker(BaseTrainerWorker):
     if not model_id:
       raise ValueError("model_id is required for optim_step")
 
-    self.peft_model.set_adapter(model_id)
+    self.activate(model_id)
     try:
       adapter_state = self.adapter_states[model_id]
     except KeyError as e:
@@ -346,5 +353,5 @@ class LoraTrainingWorker(BaseTrainerWorker):
     include_prompt_logprobs: bool = False,
   ) -> dict[str, Any]:
     if model_id:
-      self.peft_model.set_adapter(model_id)
+      self.activate(model_id)
     return super().generate(self.peft_model, prompt_tokens, max_tokens, num_samples, temperature, include_prompt_logprobs)
