@@ -60,6 +60,14 @@ class PrefetchTest(unittest.TestCase):
       result = prefetch.prefetch(str(self.dir), log=lambda *_: None)
     self.assertEqual(result["bytes"], 4 * 1024 * 1024 + 17)
 
+  def test_files_already_read_are_not_read_again_unless_they_change(self):
+    with patch.dict(os.environ, {"OPEN_RL_PREFETCH": "always"}), patch.object(prefetch, "fs_type", return_value="nfs"):
+      self.assertEqual(prefetch.prefetch(str(self.dir), log=lambda *_: None)["files"], 2)
+      self.assertIsNone(prefetch.prefetch(str(self.dir), log=lambda *_: None))
+      (self.dir / "model-00002-of-00002.safetensors").write_bytes(os.urandom(2048))
+      result = prefetch.prefetch(str(self.dir), log=lambda *_: None)
+    self.assertEqual((result["files"], result["bytes"]), (1, 2048))
+
 
 if __name__ == "__main__":
   unittest.main()
