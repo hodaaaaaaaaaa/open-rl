@@ -33,6 +33,15 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Copy source code
 COPY . .
 
+# Install the projects themselves now and stop `uv run` from syncing at start-up:
+# the image is complete, and a sync would rebuild both projects and recompile
+# their bytecode in every container (the editable build touches src/, so uv
+# never sees the install as fresh).
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --extra cluster && \
+    uv --project examples sync --frozen
+ENV UV_NO_SYNC=1
+
 # Expose source directories via PYTHONPATH instead of modifying .venv after COPY . .
 ENV PYTHONPATH="/app/src:/app/examples:/app:$PYTHONPATH"
 
