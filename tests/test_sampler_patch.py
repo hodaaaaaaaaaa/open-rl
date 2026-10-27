@@ -130,6 +130,7 @@ class SamplerLifecycleTest(unittest.IsolatedAsyncioTestCase):
     self.slicer.acquire = Mock(side_effect=self.slot)
     self.workload = WorkloadRef("sampler-test")
     self.factory = Mock(side_effect=self.create_engine)
+    self.store.pop_queued_sampling_requests.return_value = []
     self.patches = [
       patch("server.vllm_sampler.time_slicer_client_from_env", return_value=self.slicer),
       patch("server.vllm_sampler.workload_from_env", return_value=self.workload),
@@ -164,6 +165,21 @@ class SamplerLifecycleTest(unittest.IsolatedAsyncioTestCase):
     self.slicer.close.assert_awaited_once()
     self.store.delete_values.assert_awaited_once_with("open_rl:sampler_ready:test")
     self.assertEqual(self.store.set_result.call_args.args[0], "1")
+
+  async def test_requests_queued_during_a_turn_are_served_in_it(self):
+    self.store.get_sampling_requests_for_model.side_effect = [[{"request_id": "1"}], [{"request_id": SHUTDOWN_SENTINEL}]]
+    self.store.pop_queued_sampling_requests.side_effect = [[{"request_id": "2"}], []]
+    await serve_time_sliced("test", self.store, self.factory)
+    self.assertEqual(self.events, ["acquire", "create", "release", "acquire", "release"])
+    self.engine.wake_up.assert_awaited_once()
+    self.assertEqual({call.args[0] for call in self.store.set_result.call_args_list}, {"1", "2"})
+
+  async def test_a_shutdown_queued_during_a_turn_ends_the_sampler(self):
+    self.store.get_sampling_requests_for_model.side_effect = [[{"request_id": "1"}]]
+    self.store.pop_queued_sampling_requests.side_effect = [[{"request_id": "2"}, {"request_id": SHUTDOWN_SENTINEL}]]
+    await serve_time_sliced("test", self.store, self.factory)
+    self.assertEqual({call.args[0] for call in self.store.set_result.call_args_list}, {"1", "2"})
+    self.engine.shutdown.assert_called_once()
 
   async def test_registration_failure_never_constructs_engine(self):
     self.slicer.register.side_effect = RuntimeError("registration failed")
