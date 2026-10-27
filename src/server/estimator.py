@@ -131,6 +131,6 @@ def footprint(base_model: str, fine_tuning_type: str, role: str) -> Footprint:
   return Footprint(device, host, int(host * HOST_LIMIT_FACTOR))
 
 
-def pinned_accelerator_bytes(device: int, exclusive_lora: bool) -> int:
-  """Test-only: claim more than an L4 holds for every worker but an exclusive LoRA job's, so only that job lands on L4."""
-  return device if exclusive_lora else max(device, 24 * GIB)
+def pinned_accelerator_bytes(device: int, exclusive_small: bool) -> int:
+  """Test-only: claim more than an L4 holds for every worker but an exclusive job whose trainer fits an L4, so only those land on L4."""
+  return device if exclusive_small else max(device, 24 * GIB)
