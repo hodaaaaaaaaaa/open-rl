@@ -32,6 +32,11 @@ class RequestStore(ABC):
     pass
 
   @abstractmethod
+  async def pop_leading_requests_for_model(self, model_id: str, ops: set[str]) -> list[dict[str, Any]]:
+    """Without blocking, pop the requests at the head of this model's queue whose op is in ops, up to the first that is not."""
+    pass
+
+  @abstractmethod
   async def put_sampling_request(self, req_data: dict[str, Any]) -> None:
     """Push a sampling request into the queue for its model."""
     pass
@@ -111,6 +116,10 @@ class InMemoryStore(RequestStore):
 
   async def get_requests_for_model(self, model_id: str) -> list[dict[str, Any]]:
     raise RuntimeError("Per-model full fine-tuning workers require REDIS_URL; in-memory queues cannot be shared across processes")
+
+  async def pop_leading_requests_for_model(self, model_id: str, ops: set[str]) -> list[dict[str, Any]]:
+    # No per-model queues here (see get_requests_for_model), so nothing is ever waiting.
+    return []
 
   async def put_sampling_request(self, req_data: dict[str, Any]) -> None:
     model_id = req_data.get("model_id", "default")
@@ -233,6 +242,20 @@ class RedisStore(RequestStore):
       await self.redis.srem(self.active_set, model_id)
 
     return batch
+
+  async def pop_leading_requests_for_model(self, model_id: str, ops: set[str]) -> list[dict[str, Any]]:
+    # Only this model's worker pops its queue and producers append at the tail,
+    # so trimming the counted head cannot drop a request pushed meanwhile.
+    queue_key = f"open_rl:queue:{model_id}"
+    leading = []
+    for item in await self.redis.lrange(queue_key, 0, -1):
+      request = json.loads(item)
+      if request.get("op") not in ops:
+        break
+      leading.append(request)
+    if leading:
+      await self.redis.ltrim(queue_key, len(leading), -1)
+    return leading
 
   async def put_sampling_request(self, req_data: dict[str, Any]) -> None:
     model_id = req_data.get("model_id", "default")

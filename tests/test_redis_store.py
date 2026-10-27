@@ -105,6 +105,16 @@ class RedisFutureTest(unittest.IsolatedAsyncioTestCase):
     await self.store.set_result("req-1", {"status": "pending"})
     self.assertEqual((await self.store.get_result("req-1", timeout=0.3))["type"], "try_again")
 
+  async def test_pop_leading_requests_stops_at_the_first_other_op(self) -> None:
+    ops = ["optim_step", "forward_backward", "save_weights_for_sampler", "optim_step"]
+    for i, op in enumerate(ops):
+      await self.store.put_request({"model_id": "run-a", "request_id": f"r{i}", "op": op})
+    leading = await self.store.pop_leading_requests_for_model("run-a", {"forward_backward", "optim_step"})
+    self.assertEqual([r["request_id"] for r in leading], ["r0", "r1"])
+    self.assertEqual(await self.store.pop_leading_requests_for_model("run-a", {"forward_backward", "optim_step"}), [])
+    rest = await self.store.get_requests_for_model("run-a")
+    self.assertEqual([r["request_id"] for r in rest], ["r2", "r3"])
+
   async def test_get_requests_rotates_between_tenants(self) -> None:
     for i in range(3):
       await self.store.put_request({"model_id": "tenant-a", "request_id": f"a{i}"}, active_set_id="base-1")
