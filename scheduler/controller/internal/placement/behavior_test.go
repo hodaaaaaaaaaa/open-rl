@@ -15,6 +15,9 @@
 //   - a worker no single node can hold stays waiting, with a reason
 //   - placed workers stay put when capacity frees; new capacity serves new
 //     work
+//   - a sharing worker joins the claim its owner already holds, so an RL
+//     job's trainer and sampler take turns with each other, not with
+//     another job
 //
 // Who is resident at any moment is the timeslicer's job, tested in
 // tests/test_accel_timeslicer.py. The pipeline against a real API server is
@@ -325,5 +328,27 @@ func TestATorchrunGroupTakesWholeDevicesOnOneNode(t *testing.T) {
 	// A shareable single-device worker never joins a group's claim.
 	if got := c.arrive(trainer("small", 6)); got != "" {
 		t.Fatalf("a single-device worker joined %q, but group claims are exclusive", got)
+	}
+}
+
+// Two RL jobs, one GPU each, both full. Each sampler joins its own job's
+// trainer even when it arrives first and the other job's claim sorts
+// earlier: the pair alternates phases, so neither waits on the other job.
+func TestASamplerSharesWithItsOwnTrainer(t *testing.T) {
+	c := newCluster(t, gpu80("node-a", "trainer", "sampler"), gpu80("node-b", "trainer", "sampler"))
+	job := func(id, role string, memoryGiB int64) Request {
+		return Request{Shareable: true, Role: role, Owner: id, WorkerID: role + "-" + id, Memory: gib(memoryGiB), HostRequestBytes: gib(memoryGiB)}
+	}
+	trainerA := c.arrive(job("job-a", "trainer", 60))
+	trainerB := c.arrive(job("job-b", "trainer", 60))
+	if trainerA == "" || trainerB == "" || trainerA == trainerB {
+		t.Fatalf("trainers placed on %q and %q, want a GPU each", trainerA, trainerB)
+	}
+
+	if got := c.arrive(job("job-b", "sampler", 40)); got != trainerB {
+		t.Errorf("job-b's sampler landed on %q, want its trainer's %q", got, trainerB)
+	}
+	if got := c.arrive(job("job-a", "sampler", 40)); got != trainerA {
+		t.Errorf("job-a's sampler landed on %q, want its trainer's %q", got, trainerA)
 	}
 }
