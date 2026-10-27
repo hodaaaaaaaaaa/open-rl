@@ -4,12 +4,14 @@ either a LoRA adapter (lora_id) or a whole-model weights version (weights_path).
 import argparse
 import asyncio
 import hashlib
+import json
 import os
 import signal
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from itertools import groupby
+from pathlib import Path
 from typing import Any
 
 from opentelemetry import propagate, trace
@@ -66,6 +68,73 @@ def engine_kwargs_from_env(fft_enabled: bool) -> dict[str, Any]:
     engine_kwargs["max_loras"] = int(os.getenv("VLLM_MAX_LORAS", "8"))
     engine_kwargs["max_lora_rank"] = int(os.getenv("VLLM_MAX_LORA_RANK", "64"))
   return engine_kwargs
+
+
+def kv_size_path(engine_kwargs: dict[str, Any]) -> Path | None:
+  """Where the KV cache size vLLM chose for this engine setup on this GPU type is kept.
+
+  vLLM sizes the KV cache by profiling, which records every CUDA graph once
+  just to measure it (about 13 s for gemma-4-E2B on an H100) before recording
+  them for real. The size depends only on the model, the engine settings, the
+  GPU and the vLLM version, so it is kept next to the compile cache, which is
+  on the shared volume, and later samplers with the same setup skip the profiling.
+  """
+  root = os.getenv("VLLM_CACHE_ROOT")
+  if not root or os.getenv("OPEN_RL_VLLM_KV_SIZE_CACHE", "1") == "0":
+    return None
+  import torch
+  import vllm
+
+  if not torch.cuda.is_available():
+    return None
+  device = torch.cuda.get_device_properties(0)
+  setup = {"engine": engine_kwargs, "gpu": device.name, "gpu_bytes": device.total_memory, "vllm": vllm.__version__}
+  digest = hashlib.sha256(json.dumps(setup, sort_keys=True, default=str).encode()).hexdigest()[:32]
+  return Path(root) / "openrl-kv-cache-bytes" / f"{digest}.json"
+
+
+def read_kv_size(path: Path | None) -> int | None:
+  try:
+    return int(json.loads(path.read_text())["kv_cache_memory_bytes"]) if path else None
+  except (OSError, ValueError, KeyError, TypeError):
+    return None
+
+
+def write_kv_size(path: Path, kv_bytes: int) -> None:
+  path.parent.mkdir(parents=True, exist_ok=True)
+  tmp = path.with_suffix(f".{os.getpid()}.tmp")
+  tmp.write_text(json.dumps({"kv_cache_memory_bytes": kv_bytes}))
+  tmp.replace(path)
+
+
+def worker_kv_cache_bytes(worker: Any) -> int | None:
+  """Runs in the engine's worker process (collective_rpc): the KV cache size its memory profiling chose."""
+  return getattr(worker, "available_kv_cache_memory_bytes", None)
+
+
+def build_engine(engine_kwargs: dict[str, Any], kv_path: Path | None, kv_bytes: int | None) -> AsyncLLMEngine:
+  """The sampler's engine, with the kept KV cache size when there is one."""
+  if kv_bytes is None:
+    return AsyncLLMEngine.from_engine_args(AsyncEngineArgs(**engine_kwargs))
+  try:
+    return AsyncLLMEngine.from_engine_args(AsyncEngineArgs(**engine_kwargs, kv_cache_memory_bytes=kv_bytes))
+  except Exception:
+    # A kept size that no longer fits must not fail every restart; the next one profiles.
+    if kv_path is not None:
+      kv_path.unlink(missing_ok=True)
+    raise
+
+
+async def remember_kv_size(engine: AsyncLLMEngine, kv_path: Path | None) -> None:
+  """Keep the KV cache size a profiled engine chose, for the next sampler with the same setup."""
+  if kv_path is None:
+    return
+  try:
+    sizes = await engine.collective_rpc(worker_kv_cache_bytes)
+    if sizes and all(sizes):
+      write_kv_size(kv_path, int(min(sizes)))
+  except Exception as exc:
+    print(f"[vLLM Worker] Could not keep the KV cache size: {exc}")
 
 
 def resolve_lora_path(lora_id: str, lora_path: str | None) -> str:
@@ -313,6 +382,7 @@ async def serve(
   time_slicer: TimeSlicerClient | None = None,
   workload: WorkloadRef | None = None,
   continuous: bool = False,
+  on_engine_built: Callable[[AsyncLLMEngine], Awaitable[None]] | None = None,
 ) -> None:
   """Build the engine, then serve the model's queue until the shutdown sentinel arrives.
 
@@ -323,6 +393,8 @@ async def serve(
   """
   async with holding_gpu(time_slicer, workload):
     sampler = Sampler(make_engine())
+    if on_engine_built is not None:
+      await on_engine_built(sampler.engine)
     if time_slicer is not None:
       await sampler.sleep()  # give the memory back before releasing the slot
   state = get_state_store()
@@ -372,14 +444,19 @@ async def serve(
     sampler.engine.shutdown()
 
 
-async def serve_time_sliced(model_id: str, store: RequestStore, make_engine: Callable[[], AsyncLLMEngine]) -> None:
+async def serve_time_sliced(
+  model_id: str,
+  store: RequestStore,
+  make_engine: Callable[[], AsyncLLMEngine],
+  on_engine_built: Callable[[AsyncLLMEngine], Awaitable[None]] | None = None,
+) -> None:
   """An FFT sampler shares its GPU with the trainer, so it is registered with the time slicer while it serves."""
   time_slicer = time_slicer_client_from_env()
   workload = workload_from_env(os.getpid(), name=local_workload_name("sampler", model_id), claim=SAMPLER_CLAIM)
   try:
     await time_slicer.register(workload)
     try:
-      await serve(model_id, store, make_engine, time_slicer, workload)
+      await serve(model_id, store, make_engine, time_slicer, workload, on_engine_built=on_engine_built)
     finally:
       # A faulted process still holds the GPU; the grant moves on once it exits.
       if not time_slicer.faulted:
@@ -391,9 +468,15 @@ async def serve_time_sliced(model_id: str, store: RequestStore, make_engine: Cal
 async def run_sampling_worker(model_id: str) -> None:
   fft_enabled = os.getenv("OPEN_RL_ENABLE_FFT", "").lower() == "true"
   engine_kwargs = engine_kwargs_from_env(fft_enabled)
+  kv_path = kv_size_path(engine_kwargs)
+  kv_bytes = read_kv_size(kv_path)
 
   def make_engine() -> AsyncLLMEngine:
-    return AsyncLLMEngine.from_engine_args(AsyncEngineArgs(**engine_kwargs))
+    return build_engine(engine_kwargs, kv_path, kv_bytes)
+
+  async def remember(engine: AsyncLLMEngine) -> None:
+    if kv_bytes is None:
+      await remember_kv_size(engine, kv_path)
 
   loop = asyncio.get_running_loop()
   task = asyncio.current_task()
@@ -408,10 +491,10 @@ async def run_sampling_worker(model_id: str) -> None:
         break
     # An exclusive sampler is alone on its GPU, so it serves awake like a LoRA one.
     if fft_enabled and time_slicing_enabled():
-      await serve_time_sliced(model_id, get_store(), make_engine)
+      await serve_time_sliced(model_id, get_store(), make_engine, on_engine_built=remember)
     else:
       # A LoRA sampler serves every job's adapter on one base model, so requests start as they arrive.
-      await serve(model_id, get_store(), make_engine, continuous=not fft_enabled)
+      await serve(model_id, get_store(), make_engine, continuous=not fft_enabled, on_engine_built=remember)
   except asyncio.CancelledError:
     pass  # serve has completed cleanup before cancellation reaches here.
   finally:
