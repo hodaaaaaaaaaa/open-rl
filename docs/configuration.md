@@ -81,6 +81,8 @@ backend by default for physical checkpoint/restore.
 | Env var | Default | What it does |
 | --- | --- | --- |
 | `VLLM_ARCHITECTURE_OVERRIDE` | unset | Optional architecture override passed to the in-repo vLLM worker. Gemma 4 examples use `Gemma4ForCausalLM`. |
+| `VLLM_MAX_LORAS` | `8` | Adapters a LoRA sampler batches at once. A shared runtime with more jobs than this serves them in turns. |
+| `VLLM_MAX_NUM_SEQS`, `VLLM_MAX_NUM_BATCHED_TOKENS` | by GPU memory (`256`, `16384` at 60 GiB or more) | Sequences in flight and prefill tokens per step for a sampler. |
 | `VLLM_ENABLE_MULTIMODAL` | `0` | By default the samplers pass `limit_mm_per_prompt={"image": 0, "video": 0}`. Text checkpoints published as `*ForConditionalGeneration` otherwise make vLLM reserve a multi-GiB encoder cache during startup that no OpenRL code path can use, which can OOM engine init. Gemma 4 samplers also load the text-only `Gemma4ForCausalLM`. Set to `1` to restore stock vLLM behaviour and keep the full model. |
 
 ## Client variables

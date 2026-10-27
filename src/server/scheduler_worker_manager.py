@@ -120,7 +120,18 @@ def pod_env(worker: Worker) -> list[dict[str, Any]]:
   }
   # MAX_JOBS caps FlashInfer's JIT build, which otherwise runs one ~3GB
   # compiler per core and blows through the pod's host memory limit.
-  for name in ("VLLM_GPU_MEMORY_UTILIZATION", "VLLM_MAX_MODEL_LEN", "VLLM_ENABLE_MULTIMODAL", "OPEN_RL_TRAIN_TOKEN_BUDGET", "MAX_JOBS"):
+  # The VLLM_MAX_* batch settings size a shared LoRA sampler for the number of
+  # jobs it serves (adapters per batch, sequences in flight).
+  for name in (
+    "VLLM_GPU_MEMORY_UTILIZATION",
+    "VLLM_MAX_MODEL_LEN",
+    "VLLM_ENABLE_MULTIMODAL",
+    "VLLM_MAX_LORAS",
+    "VLLM_MAX_NUM_SEQS",
+    "VLLM_MAX_NUM_BATCHED_TOKENS",
+    "OPEN_RL_TRAIN_TOKEN_BUDGET",
+    "MAX_JOBS",
+  ):
     if os.getenv(name):
       values[name] = os.environ[name]
   # vLLM keys its torch.compile artifacts by model, GPU type and engine config.
