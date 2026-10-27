@@ -38,7 +38,10 @@ def tiny_lora_worker() -> trp.LoraTrainingWorker:
 def adapter_files(directory: str) -> tuple[dict[str, torch.Tensor], dict]:
   tensors = load_file(os.path.join(directory, "adapter_model.safetensors"))
   with open(os.path.join(directory, "adapter_config.json")) as f:
-    return tensors, json.load(f)
+    config = json.load(f)
+  # PEFT keeps target_modules as a set, so its JSON order varies from run to run.
+  config["target_modules"] = sorted(config["target_modules"])
+  return tensors, config
 
 
 class LoraBackgroundSaveTest(unittest.IsolatedAsyncioTestCase):
