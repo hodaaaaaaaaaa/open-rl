@@ -2,6 +2,8 @@
 
 import json
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +18,35 @@ from vllm.model_executor.model_loader.weight_utils import safetensors_weights_it
 from server.model_metadata import SPARSE_DELTA_VERSION
 
 logger = logging.getLogger(__name__)
+
+READ_THREADS = 8
+READ_BLOCK_BYTES = 16 * 1024 * 1024
+
+
+def read_into_page_cache(files: list[Path], threads: int = READ_THREADS, block: int = READ_BLOCK_BYTES) -> None:
+  """Read files with several parallel streams so the loader's mmap reads hit memory.
+
+  The loaders below read a file one tensor at a time from a single thread. On
+  shared network storage a single stream is far slower than several, and an
+  update is a few GB, so it is read here first in parallel.
+  """
+  ranges = []
+  for file in files:
+    size = file.stat().st_size
+    span = max(block, -(-size // threads))
+    ranges.extend((file, offset, min(span, size - offset)) for offset in range(0, size, span))
+
+  def read(file: Path, offset: int, length: int) -> None:
+    fd = os.open(file, os.O_RDONLY)
+    try:
+      end = offset + length
+      while offset < end and (chunk := os.pread(fd, min(block, end - offset), offset)):
+        offset += len(chunk)
+    finally:
+      os.close(fd)
+
+  with ThreadPoolExecutor(max_workers=threads) as pool:
+    list(pool.map(lambda item: read(*item), ranges))
 
 
 def read_weight_metadata(path: Path) -> dict:
@@ -43,7 +74,9 @@ def read_sparse_patches(path: Path, metadata: dict, device: torch.device | str =
     raise ValueError("Sparse layer_names and layer_shapes must be matching lists")
   if any(not isinstance(name, str) or not name for name in names) or len(set(names)) != len(names):
     raise ValueError("Sparse layer_names must be unique non-empty strings")
-  tensors = load_file(str(path / "delta.safetensors"), device="cpu")
+  delta_file = path / "delta.safetensors"
+  read_into_page_cache([delta_file])
+  tensors = load_file(str(delta_file), device="cpu")
   expected = {f"{i}.{kind}" for i in range(len(names)) for kind in ("indices", "values")}
   if set(tensors) != expected:
     raise ValueError("Sparse tensor keys do not match the declared layers")
@@ -108,6 +141,7 @@ class DeltaSnapshotWeightTransferEngine(WeightTransferEngine):
       files = sorted(str(file) for file in path.glob("*.safetensors")) if path.is_dir() else [str(path)]
       if not files or any(not file.endswith(".safetensors") or Path(file).name == "delta.safetensors" for file in files):
         raise ValueError(f"No full checkpoint safetensors found at {path}")
+      read_into_page_cache([Path(file) for file in files])
       # Dense checkpoints need layerwise post-processing; sparse patches must bypass it.
       initialize_layerwise_reload(self.model)
       self.model.load_weights(safetensors_weights_iterator(files, use_tqdm_on_load=False))
