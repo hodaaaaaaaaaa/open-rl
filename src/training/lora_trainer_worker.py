@@ -14,7 +14,7 @@ from peft import PeftModelForCausalLM, get_peft_model
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
 
 from training.trainer_worker import BaseTrainerWorker, Datum
-from training.types import LoraConfig
+from training.types import LoraConfig, TensorData
 
 ENABLE_GRADIENT_CHECKPOINTING = os.getenv("ENABLE_GRADIENT_CHECKPOINTING", "1") == "1"
 
@@ -35,6 +35,7 @@ class LoraTrainingWorker(BaseTrainerWorker):
     self.base_model_name: str | None = None
     self.adapter_states: dict[str, dict[str, Any]] = {}
     self.lora_target_modules: dict[tuple[bool, bool, bool], list[str]] = {}
+    self.warmed_up = False
 
   def is_ready(self) -> bool:
     return self.base_model is not None
@@ -140,7 +141,33 @@ class LoraTrainingWorker(BaseTrainerWorker):
     self.peft_model.train()
     print(f"LoRA adapter '{adapter_id}' created and set to active.")
 
+    self.warm_up(adapter_id)
     self.save_adapter(adapter_id)
+
+  # Sequences and tokens per sequence of the warm-up pass.
+  WARM_UP_SHAPE = (8, 512)
+
+  def warm_up(self, adapter_id: str) -> None:
+    """Run one small training pass on the process's first adapter and discard its gradients.
+
+    A process's first forward/backward loads CUDA kernels and libraries and
+    compiles Triton kernels: 4-8 s more than later passes in the fleet test.
+    Paid here, it overlaps with the job's wait for its first samples instead of
+    delaying its first step. The RNG is forked so the job's seed is unaffected.
+    """
+    if self.warmed_up or self.device.type != "cuda":
+      return
+    self.warmed_up = True
+    count, length = self.WARM_UP_SHAPE
+    vocab = self.base_model.config.get_text_config().vocab_size
+    row = [i % vocab for i in range(1, length + 1)]
+    datum = Datum(model_input=row[:-1], loss_fn_inputs={"target_tokens": TensorData(data=row[1:]), "weights": TensorData(data=[1.0] * (length - 1))})
+    started = time.perf_counter()
+    with torch.random.fork_rng(devices=[self.device]):
+      self.forward_backward([datum] * count, "cross_entropy", model_id=adapter_id)
+    for param in self.adapter_states[adapter_id]["trainable_params"]:
+      param.grad = None
+    print(f"[LoRA] Warmed up the trainer in {time.perf_counter() - started:.1f} s")
 
   def create_model(self, base_model_name: str, model_id: str, config: LoraConfig) -> None:
     """Load the shared base model if needed, then create a trainable LoRA adapter."""
@@ -270,6 +297,7 @@ class LoraTrainingWorker(BaseTrainerWorker):
         adapter_state["optimizer"] = optimizer
         print(f"Restored optimizer state for '{model_id}' from {optimizer_path}")
 
+    self.warm_up(model_id)
     print(f"Loaded state for '{model_id}' from {state_path}")
     return {"model_id": model_id, "is_lora": True, "base_model": base_model}
 
