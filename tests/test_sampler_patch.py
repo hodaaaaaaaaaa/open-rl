@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from accel_timeslicer.workload import WorkloadRef
-from server.vllm_sampler import SHUTDOWN_SENTINEL, Sampler, process_batch, serve, serve_time_sliced
+from server.vllm_sampler import SHUTDOWN_SENTINEL, JobOrder, Sampler, process_batch, serve, serve_time_sliced
 
 
 def make_engine(on_generate=None):
@@ -17,7 +17,7 @@ def make_engine(on_generate=None):
   engine.shutdown = Mock()
   engine.errored = False
 
-  def generate(prompt, sampling_params, request_id, lora_request):
+  def generate(prompt, sampling_params, request_id, lora_request, priority=0):
     async def stream():
       if on_generate is not None:
         await on_generate(request_id)
@@ -235,6 +235,32 @@ class SamplerLifecycleTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(self.results()["2"]["type"], "sample")
     self.engine.shutdown.assert_called_once()
 
+  async def test_continuous_sampler_serves_jobs_in_arrival_order(self):
+    release = asyncio.Event()
+
+    async def generate(request_id):
+      if request_id == "a1":
+        await release.wait()
+
+    self.engine.generate.side_effect = make_engine(generate).generate
+    original = self.engine.generate.side_effect
+
+    def record(*args, **kwargs):
+      if kwargs["request_id"] == "a2":
+        release.set()
+      return original(*args, **kwargs)
+
+    self.engine.generate.side_effect = record
+    self.queue(
+      [{"request_id": "a1", "lora_id": "job-a"}, {"request_id": "b1", "lora_id": "job-b"}],
+      [{"request_id": "a2", "lora_id": "job-a"}],
+      [{"request_id": SHUTDOWN_SENTINEL}],
+    )
+    await asyncio.wait_for(serve("test", self.store, lambda: self.engine, continuous=True), timeout=5)
+    priorities = {call.kwargs["request_id"]: call.kwargs["priority"] for call in self.engine.generate.call_args_list}
+    self.assertEqual(priorities["a1"], priorities["a2"])
+    self.assertLess(priorities["a1"], priorities["b1"])
+
   async def test_continuous_shutdown_waits_for_running_requests(self):
     async def generate(request_id):
       await asyncio.sleep(0.05)
@@ -296,6 +322,19 @@ class SamplerLifecycleTest(unittest.IsolatedAsyncioTestCase):
     self.assertIn("wake failed", self.results()["1"]["error_message"])
     self.assertEqual(self.results()["2"]["type"], "sample")
     self.slicer.unregister.assert_awaited_once()
+
+
+class JobOrderTest(unittest.TestCase):
+  def test_a_job_keeps_its_turn_while_it_has_requests_running(self):
+    order = JobOrder()
+    first = order.start("a")
+    self.assertEqual(order.start("a"), first)
+    self.assertGreater(order.start("b"), first)
+    order.finish("a")
+    self.assertEqual(order.start("a"), first)
+    order.finish("a")
+    order.finish("a")
+    self.assertGreater(order.start("a"), first)
 
 
 if __name__ == "__main__":
