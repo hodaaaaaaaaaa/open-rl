@@ -46,8 +46,12 @@ class HostBufferTest(unittest.TestCase):
     worker = make_worker()
     worker.model.to("cuda")
     worker.prepare_model_for_training()
+    # The trainer's order under time slicing: offload after loading, then per step
+    # reload, backward, offload, reload, optimizer step, offload.
+    worker.sleep()
+    self.assertIsNotNone(worker._spare_filler)
+    worker.wake_up()
     loss = worker.model.fc(torch.ones(2, 4, device="cuda")).sum()
-    # The trainer's order under time slicing: backward, offload, reload, optimizer step, offload.
     loss.backward()
     worker.sleep()
     worker.wake_up()

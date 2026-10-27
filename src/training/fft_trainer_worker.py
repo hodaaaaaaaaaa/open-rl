@@ -131,18 +131,21 @@ class FFTTrainingWorker(BaseTrainerWorker):
         print(f"Failed to enable gradient checkpointing: {e}")
 
     self.model.train()
-    if self.cpu_offload and torch.cuda.is_available() and self._spare_filler is None and not self._spare_buffers:
-      self._spare_filler = threading.Thread(target=self._fill_spare_buffers, name="pin-offload-buffers", daemon=True)
-      self._spare_filler.start()
 
   # AdamW keeps these two per-parameter states, each shaped and typed like the parameter.
   ADAMW_STATE_KEYS = ("exp_avg", "exp_avg_sq")
 
+  def _start_filling_spare_buffers(self) -> None:
+    if self._spare_filler is None and not self._spare_buffers and self.trainable_params:
+      self._spare_filler = threading.Thread(target=self._fill_spare_buffers, name="pin-offload-buffers", daemon=True)
+      self._spare_filler.start()
+
   def _fill_spare_buffers(self) -> None:
-    """Pin host buffers for gradients and AdamW state now, while the trainer waits for its first request.
+    """Pin host buffers for gradients and AdamW state while the trainer waits for its first step.
 
     Pinning tens of GB takes seconds, and the first offload after a backward and
-    after an optimizer step would otherwise pay it on the job's first step.
+    after an optimizer step would otherwise pay it on the job's first step. It
+    starts after the first offload: pinning alongside an offload slows both.
     """
     for param in self.trainable_params:
       for key in ("grad", *self.ADAMW_STATE_KEYS):
@@ -567,6 +570,8 @@ class FFTTrainingWorker(BaseTrainerWorker):
 
     self._is_offloaded = True
     print(f"[FFT Worker] Offloaded weights & states to pinned CPU memory in {(time.perf_counter() - start_t) * 1000:.1f} ms.")
+    if self.optimizer is None:
+      self._start_filling_spare_buffers()
 
   def wake_up(self) -> None:
     """Reload pinned CPU shadow tensors back to CUDA VRAM without destroying host shadow buffers."""
