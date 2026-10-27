@@ -590,8 +590,9 @@ func (r *WorkloadReconciler) assign(ctx context.Context, worker *openrlv1alpha1.
 		// a claim; only the smallest name places, the rest wait for its claim.
 		if placement.MayWaitForOwner(request, fleet) {
 			var workers openrlv1alpha1.WorkloadList
-			// The cache is enough: a stale read costs one requeue.
-			if err := r.List(ctx, &workers, client.InNamespace(r.Namespace)); err != nil {
+			// A consistent read: siblings created together may not both be in
+			// the cache yet, and each would then miss the other and cut a claim.
+			if err := r.fleetReader().List(ctx, &workers, client.InNamespace(r.Namespace)); err != nil {
 				return nil, nil, "", fmt.Errorf("list workloads: %w", err)
 			}
 			if leader := ownerLeader(worker, workers.Items); leader != "" {
