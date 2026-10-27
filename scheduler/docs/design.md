@@ -788,11 +788,35 @@ the dedicated-first arc described above.
   preference are the shared-ledger rules below, unchanged; a booking that
   loses the last seat to a race falls through to a dedicated claim.
 
-One more placement policy is recorded as future work, not V1 behavior:
+* **Owner-affinity:** a joining workload prefers a ledger that already
+  holds a seat with its owner ID (first in the order below). An RL trainer
+  and sampler alternate phases, so a same-owner pair costs each other
+  little; paired with another job's workers, each job's sampling waits on
+  the other's training.
 
-* **Owner-affinity:** prefer seating on a ledger whose seats share the
-  workload's owner. An RL trainer and sampler alternate phases, so packing
-  a same-owner pair costs little and frees a device.
+  Under `binpack`, the second half of a pair created together usually
+  reconciles while the first half's claim is still unallocated, and would
+  cut a second claim that the next job then cross-pairs onto. So a
+  shareable workload with an owner ID waits (`Pending`,
+  `WaitingForOwnerClaim`) while a same-owner workload holds a shareable,
+  unallocated claim, unless it already holds a seat itself or an
+  allocated same-owner ledger can seat it. Like
+  `WaitingForPredecessorClaim`, this is a wait, not a capacity verdict, so
+  the placement timeout does not apply. It is event-driven rather than
+  timed: every managed ResourceClaim change wakes every workload, so the
+  waiter joins the moment the claim allocates, and if it never does, the
+  owner's fallback to sharing releases it and ends the wait.
+
+  Siblings created together usually reconcile concurrently, before either
+  has a claim to wait on. So, under the same conditions, a workload also
+  waits (`WaitingForOwnerSibling`, same handling) while another workload of
+  its owner that is shareable, single-device, not deleting, not `Failed`
+  and not yet assigned a claim has a smaller name. The smallest name
+  places normally; its claim's creation wakes the others, which then wait
+  on that claim as above. Sibling Workloads are read past the cache:
+  siblings created together may not both be cached yet, and each would
+  then miss the other and cut a claim. Exclusive and multi-GPU workloads, and
+  `spread`, never wait.
 
 ### Shared-ledger eligibility
 
@@ -816,10 +840,12 @@ A workload may join a ledger when:
 Among eligible ledgers, the controller prefers, packing tightly while
 keeping turn queues short:
 
-1. the smallest GPU that fits (preserves large devices for workloads that
+1. a ledger holding a seat with the workload's owner ID (owner-affinity,
+   above);
+2. the smallest GPU that fits (preserves large devices for workloads that
    need them);
-2. fewer seats (a shorter wait for a turn);
-3. ledger name (a deterministic tie-break, so concurrent reconcilers converge
+3. fewer seats (a shorter wait for a turn);
+4. ledger name (a deterministic tie-break, so concurrent reconcilers converge
    on the same choice and resolve it by compare-and-swap conflict (the resourceVersion mechanism of
    section 5) rather than wandering).
 

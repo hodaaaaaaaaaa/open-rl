@@ -25,8 +25,10 @@ scheduler/controller/             the Go module
 │   │                             devices, then least waste). What a dedicated
 │   │                             claim asks DRA for.
 │   ├── placement.go              SelectClaim (which allocated claim a worker
-│   │                             joins on the fallback) and the admission
-│   │                             checks; Claim/Node/Fleet are plain structs.
+│   │                             joins on the fallback), OwnerClaimPending
+│   │                             (wait for a same-owner claim to allocate)
+│   │                             and the admission checks; Claim/Node/Fleet
+│   │                             are plain structs.
 │   ├── behavior_test.go          the end-to-end behaviors as arrivals and
 │   │                             departures, with a simulated DRA playing the
 │   │                             allocator. Start reading tests here.
