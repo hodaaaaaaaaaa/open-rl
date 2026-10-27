@@ -470,6 +470,11 @@ async def serve(
             async with holding_gpu(time_slicer, workload, sampler):
               started = True
               await process_batch(sampler, store, requests)
+              # A step's requests can arrive while the first of them run. Serving
+              # them in this turn saves a sleep, a handoff and a wake.
+              while time_slicer is not None and not shutdown and (queued := await store.pop_queued_sampling_requests(model_id)):
+                shutdown = any(req.get("request_id") == SHUTDOWN_SENTINEL for req in queued)
+                await process_batch(sampler, store, [req for req in queued if req.get("request_id") != SHUTDOWN_SENTINEL])
           if shutdown:
             await wait_for_requests(sampler, store, dict(in_flight))
             return

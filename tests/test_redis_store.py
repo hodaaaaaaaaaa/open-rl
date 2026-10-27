@@ -114,6 +114,11 @@ class RedisFutureTest(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(await self.store.pop_leading_requests_for_model("run-a", {"forward_backward", "optim_step"}), [])
     rest = await self.store.get_requests_for_model("run-a")
     self.assertEqual([r["request_id"] for r in rest], ["r2", "r3"])
+  async def test_pop_queued_sampling_requests_does_not_wait(self) -> None:
+    self.assertEqual(await self.store.pop_queued_sampling_requests("base-m1"), [])
+    await self.store.put_sampling_request({"model_id": "base-m1", "request_id": "r1"})
+    await self.store.put_sampling_request({"model_id": "base-m1", "request_id": "r2"})
+    self.assertEqual([r["request_id"] for r in await self.store.pop_queued_sampling_requests("base-m1")], ["r1", "r2"])
 
   async def test_get_requests_rotates_between_tenants(self) -> None:
     for i in range(3):

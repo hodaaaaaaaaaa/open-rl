@@ -47,6 +47,11 @@ class RequestStore(ABC):
     pass
 
   @abstractmethod
+  async def pop_queued_sampling_requests(self, model_id: str) -> list[dict[str, Any]]:
+    """Without blocking, return all sampling requests queued for this model."""
+    pass
+
+  @abstractmethod
   async def set_result(self, req_id: str, result: dict[str, Any]) -> None:
     """Resolve a future by its request ID."""
     pass
@@ -126,6 +131,9 @@ class InMemoryStore(RequestStore):
     if model_id not in self.sampling_queues:
       self.sampling_queues[model_id] = asyncio.Queue()
     await self.sampling_queues[model_id].put(req_data)
+
+  async def pop_queued_sampling_requests(self, model_id: str) -> list[dict[str, Any]]:
+    return await self.get_sampling_requests_for_model(model_id)
 
   async def get_sampling_requests_for_model(self, model_id: str) -> list[dict[str, Any]]:
     if model_id not in self.sampling_queues:
@@ -272,14 +280,13 @@ class RedisStore(RequestStore):
     if not result:
       return []
 
-    batch = [json.loads(result[1])]
+    return [json.loads(result[1]), *await self.pop_queued_sampling_requests(model_id)]
 
-    while True:
-      item = await self.redis.lpop(queue_key)
-      if not item:
-        break
+  async def pop_queued_sampling_requests(self, model_id: str) -> list[dict[str, Any]]:
+    queue_key = f"open_rl:sampler_queue:{model_id}"
+    batch = []
+    while item := await self.redis.lpop(queue_key):
       batch.append(json.loads(item))
-
     return batch
 
   async def set_result(self, req_id: str, result: dict[str, Any]) -> None:
