@@ -29,13 +29,17 @@ def active_adapter_parameters(model: PeftModelForCausalLM, adapter_id: str) -> l
   return params
 
 
-def write_adapter(save_path: str, adapter_id: str, state: dict[str, torch.Tensor], config: PeftLoraConfig, metadata: dict[str, Any]) -> None:
-  """Write the files PeftModel.save_pretrained writes for one named adapter: <save_path>/<adapter_id>/."""
-  from safetensors.torch import save_file
+def write_adapter(save_path: str, adapter_id: str, weights: bytes, config: PeftLoraConfig, metadata: dict[str, Any]) -> None:
+  """Write the files PeftModel.save_pretrained writes for one named adapter: <save_path>/<adapter_id>/.
 
+  weights is the serialized safetensors file. A plain write releases the GIL,
+  which safetensors' save_file holds for the whole write, so the training
+  thread keeps running while this one waits on shared storage.
+  """
   output_dir = os.path.join(save_path, adapter_id)
   os.makedirs(output_dir, exist_ok=True)
-  save_file(state, os.path.join(output_dir, "adapter_model.safetensors"), metadata={"format": "pt"})
+  with open(os.path.join(output_dir, "adapter_model.safetensors"), "wb") as f:
+    f.write(weights)
   config.save_pretrained(output_dir)
   with open(os.path.join(save_path, "metadata.json"), "w") as f:
     json.dump(metadata, f)
@@ -240,11 +244,16 @@ class LoraTrainingWorker(BaseTrainerWorker):
     """
     assert self.peft_model is not None, "Model must be loaded first."
     from peft.utils import get_peft_model_state_dict
+    from safetensors.torch import save
 
+    # vLLM runs adapters in the base model's dtype, so the sampler copy is
+    # written in it: half the bytes for an fp32 adapter on a bf16 model.
+    dtype = self.base_model.dtype if self.base_model is not None else None
     state = {
-      name: tensor.detach().to("cpu", copy=True).contiguous()
+      name: tensor.detach().to(dtype if dtype is not None and tensor.is_floating_point() else tensor.dtype).to("cpu", copy=True).contiguous()
       for name, tensor in get_peft_model_state_dict(self.peft_model, adapter_name=model_id).items()
     }
+    weights = save(state, metadata={"format": "pt"})
     config = copy.deepcopy(self.peft_model.peft_config[model_id])
     # What PeftModel.save_pretrained records for a saved adapter.
     config.inference_mode = True
@@ -254,7 +263,7 @@ class LoraTrainingWorker(BaseTrainerWorker):
     if alias is not None:
       metadata["alias"] = alias
     save_path = os.path.join(os.getenv("OPEN_RL_TMP_DIR", "/tmp/open-rl"), "peft", model_id)
-    return self.adapter_writer.submit(write_adapter, save_path, model_id, state, config, metadata)
+    return self.adapter_writer.submit(write_adapter, save_path, model_id, weights, config, metadata)
 
   def load_from_state(self, model_id: str, state_path: str, restore_optimizer: bool = False) -> dict[str, Any]:
     """Create an adapter from a saved state directory.

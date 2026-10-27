@@ -82,6 +82,23 @@ class LoraBackgroundSaveTest(unittest.IsolatedAsyncioTestCase):
     with open(os.path.join(self.tmp, "peft", "job-one", "metadata.json")) as f:
       self.assertEqual(json.load(f)["alias"], "step-1")
 
+  async def test_writes_a_bf16_model_adapter_in_bf16(self) -> None:
+    worker = tiny_lora_worker()
+    worker.base_model.to(torch.bfloat16)
+    self.processor = trp.TrainingRequestsProcessor(InMemoryStore(), worker)
+    await self.run_steps(
+      commands.CreateModel(request_id="create-bf16", model_id="job-bf16", base_model="tiny", lora_config=LoraConfig(rank=2, seed=1)),
+      commands.SaveWeightsForSampler(request_id="save-bf16", model_id="job-bf16"),
+    )
+
+    with tempfile.TemporaryDirectory() as reference:
+      worker.peft_model.save_pretrained(reference, selected_adapters=["job-bf16"])
+      expected_tensors, _ = adapter_files(os.path.join(reference, "job-bf16"))
+    tensors, _ = adapter_files(os.path.join(self.tmp, "peft", "job-bf16", "job-bf16"))
+    for name, tensor in expected_tensors.items():
+      self.assertEqual(tensors[name].dtype, torch.bfloat16, name)
+      self.assertTrue(torch.equal(tensors[name], tensor.to(torch.bfloat16)), name)
+
   async def test_the_answer_waits_for_the_write_while_the_next_request_runs(self) -> None:
     release = threading.Event()
     write = lora_module.write_adapter
