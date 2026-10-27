@@ -38,6 +38,8 @@ TrainingWorker = FFTTrainingWorker | LoraTrainingWorker
 # shared LoRA trainer outlives the TTL, so the loop refreshes it.
 READY_TTL_SECONDS = 3600
 READY_REFRESH_SECONDS = 60
+# Requests a time-sliced worker serves in the GPU turn it already holds when they are queued next.
+TURN_FOLLOW_UP_OPS = {"forward_backward", "optim_step"}
 
 
 def pin_worker_threads_to_this_rank() -> None:
@@ -270,6 +272,12 @@ class TrainingRequestsProcessor:
         try:
           for request in gpu_reqs:
             results.append(await self.handle_request(request))
+          # A step's optim_step often arrives while its forward_backward runs.
+          # Serving it in this turn saves a reload, an offload and a handoff.
+          while queued := await self.queued_training_requests():
+            requests.extend(queued)
+            for request in queued:
+              results.append(await self.handle_request(request))
         finally:
           await asyncio.to_thread(self.worker.sleep)
 
@@ -282,6 +290,12 @@ class TrainingRequestsProcessor:
       async with self.time_slicer.acquire(self.workload):
         for request in save_reqs:
           results.append(await self.handle_request(request))
+
+  async def queued_training_requests(self) -> list[dict[str, Any]]:
+    """Training requests already waiting at the head of a dedicated worker's queue."""
+    if not self.dedicated or is_distributed():
+      return []
+    return await self.store.pop_leading_requests_for_model(self.model_id, TURN_FOLLOW_UP_OPS)
 
   async def process_request(self, raw_request: dict[str, Any]) -> None:
     request_id, result = await self.handle_request(raw_request)

@@ -193,6 +193,9 @@ class _TrainingRequestsStoreStub(_FutureStoreStub):
       return self.batches.pop(0)
     raise asyncio.CancelledError()
 
+  async def pop_leading_requests_for_model(self, model_id, ops):
+    return []
+
   async def get_value(self, key: str) -> str | None:
     return None
 
