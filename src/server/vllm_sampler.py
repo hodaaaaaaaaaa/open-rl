@@ -242,20 +242,44 @@ async def process_batch(sampler: Sampler, store: RequestStore, requests: list[di
 
 
 async def serve_group(sampler: Sampler, store: RequestStore, batch: list[dict[str, Any]]) -> None:
-  """A dead EngineCore leaves generate() hanging, so the wait polls for it and fails what is left."""
   tasks = {asyncio.create_task(process_request(sampler, store, req)): req for req in batch}
+  await wait_for_requests(sampler, store, tasks)
+  for task in tasks:
+    task.result()
+
+
+async def wait_for_requests(sampler: Sampler, store: RequestStore, tasks: dict[asyncio.Task, dict[str, Any]]) -> None:
+  """A dead EngineCore leaves generate() hanging, so the wait polls for it and fails what is left."""
   pending = set(tasks)
   while pending:
     _, pending = await asyncio.wait(pending, timeout=ENGINE_POLL_SECONDS)
     if pending and sampler.engine.errored:
-      for task in pending:
-        task.cancel()
-      await fail_requests(store, [tasks[task] for task in pending], "vLLM engine died during the batch")
-      break
+      await fail_dead_engine(store, {task: tasks[task] for task in pending})
   if sampler.engine.errored:
     raise RuntimeError("vLLM engine is dead")
+
+
+async def fail_dead_engine(store: RequestStore, tasks: dict[asyncio.Task, dict[str, Any]]) -> None:
   for task in tasks:
-    task.result()
+    task.cancel()
+  await fail_requests(store, list(tasks.values()), "vLLM engine died during the batch")
+  raise RuntimeError("vLLM engine is dead")
+
+
+def start_requests(sampler: Sampler, store: RequestStore, requests: list[dict[str, Any]], in_flight: dict[asyncio.Task, dict[str, Any]]) -> None:
+  """Serve requests without waiting for the ones already running, so a request
+  that arrives mid-batch joins the engine's running batch instead of queueing
+  behind it. Only for samplers that never swap whole-model weights."""
+  for request in requests:
+    task = asyncio.create_task(process_request(sampler, store, request))
+    in_flight[task] = request
+    task.add_done_callback(lambda done: finished(done, in_flight))
+
+
+def finished(task: asyncio.Task, in_flight: dict[asyncio.Task, dict[str, Any]]) -> None:
+  request = in_flight.pop(task, None)
+  if not task.cancelled() and task.exception() is not None and request is not None:
+    print(f"[vLLM Worker] Could not answer request {request['request_id']}: {task.exception()}")
 
 
 async def fail_requests(store: RequestStore, requests: list[dict[str, Any]], error: Any) -> None:
@@ -288,9 +312,12 @@ async def serve(
   make_engine: Callable[[], AsyncLLMEngine],
   time_slicer: TimeSlicerClient | None = None,
   workload: WorkloadRef | None = None,
+  continuous: bool = False,
 ) -> None:
   """Build the engine, then serve the model's queue until the shutdown sentinel arrives.
 
+  With continuous, requests start as soon as they are popped (see start_requests);
+  otherwise each popped batch is served to completion before the next pop.
   Queue and store errors are retried. A dead engine or a process the time slicer
   could not park raises, so the worker exits and is restarted.
   """
@@ -299,12 +326,15 @@ async def serve(
     if time_slicer is not None:
       await sampler.sleep()  # give the memory back before releasing the slot
   state = get_state_store()
+  in_flight: dict[asyncio.Task, dict[str, Any]] = {}
   try:
     try:
       ready_at = float("-inf")
       while True:
         if time_slicer is not None and time_slicer.faulted:
           raise RuntimeError(f"Time slicer could not park this process: {time_slicer.faulted}")
+        if in_flight and sampler.engine.errored:
+          await fail_dead_engine(store, dict(in_flight))
         requests = []
         started = False
         try:
@@ -317,11 +347,15 @@ async def serve(
             continue
           shutdown = any(req.get("request_id") == SHUTDOWN_SENTINEL for req in batch)
           requests = [req for req in batch if req.get("request_id") != SHUTDOWN_SENTINEL]
-          if requests:
+          if requests and continuous:
+            started = True
+            start_requests(sampler, store, requests, in_flight)
+          elif requests:
             async with holding_gpu(time_slicer, workload, sampler):
               started = True
               await process_batch(sampler, store, requests)
           if shutdown:
+            await wait_for_requests(sampler, store, dict(in_flight))
             return
         except Exception as exc:
           if sampler.engine.errored:
@@ -331,6 +365,8 @@ async def serve(
             await fail_requests(store, requests, exc)
           await asyncio.sleep(1)
     finally:
+      for task in in_flight:
+        task.cancel()
       await state.delete_values(f"open_rl:sampler_ready:{model_id}")
   finally:
     sampler.engine.shutdown()
@@ -374,7 +410,8 @@ async def run_sampling_worker(model_id: str) -> None:
     if fft_enabled and time_slicing_enabled():
       await serve_time_sliced(model_id, get_store(), make_engine)
     else:
-      await serve(model_id, get_store(), make_engine)
+      # A LoRA sampler serves every job's adapter on one base model, so requests start as they arrive.
+      await serve(model_id, get_store(), make_engine, continuous=not fft_enabled)
   except asyncio.CancelledError:
     pass  # serve has completed cleanup before cancellation reaches here.
   finally:
