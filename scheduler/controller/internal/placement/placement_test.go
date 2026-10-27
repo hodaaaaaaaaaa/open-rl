@@ -210,6 +210,177 @@ func TestSelectClaimSkipsLedgersAtTheSeatLimit(t *testing.T) {
 	}
 }
 
+// Owner affinity leads the order: a claim already holding the worker's owner
+// wins over one with fewer owners, fewer workers and an earlier name. A worker
+// with no owner is an owner of one, so nothing matches and the order is as
+// before.
+func TestSelectClaimPrefersAClaimItsOwnerHolds(t *testing.T) {
+	fleet := NewFleet()
+	fleet.Nodes["n"] = l4Node("n", "trainer")
+	fleet.Claims["a-quiet"] = booked(&Claim{Name: "a-quiet", DeviceCount: 1, Node: "n"}, "job-b")
+	sibling := &Claim{Name: "z-sibling", DeviceCount: 1, Node: "n"}
+	sibling.Book("trainer-a", "job-a", 0, true)
+	sibling.Book("sampler-c", "job-c", 0, true)
+	fleet.Claims["z-sibling"] = sibling
+
+	sampler := trainer("sampler-a", 6)
+	sampler.Owner = "job-a"
+	if got := SelectClaim(sampler, fleet); name(got) != "z-sibling" {
+		t.Errorf("joined %q, want the claim holding the worker's owner", name(got))
+	}
+
+	if got := SelectClaim(trainer("job-new", 6), fleet); name(got) != "a-quiet" {
+		t.Errorf("ownerless worker joined %q, want the fewest-owners claim as before", name(got))
+	}
+}
+
+func TestHoldsOwner(t *testing.T) {
+	claim := &Claim{Name: "c"}
+	claim.Book("trainer-a", "job-a", 0, true)
+	if !claim.HoldsOwner("job-a") {
+		t.Error("HoldsOwner(job-a) = false, want true")
+	}
+	if claim.HoldsOwner("job-b") {
+		t.Error("HoldsOwner(job-b) = true, want false")
+	}
+	claim.Release("trainer-a")
+	if claim.HoldsOwner("job-a") {
+		t.Error("HoldsOwner(job-a) = true after the only seat was released")
+	}
+}
+
+// A worker whose owner holds a claim DRA has not allocated yet waits for it,
+// rather than pairing with another owner's worker. Everything else -- no
+// owner, no sharing, a multi-device group, a worker with a seat of its own,
+// an allocated sibling claim -- does not wait.
+func TestOwnerClaimPending(t *testing.T) {
+	sampler := func() Request {
+		req := trainer("sampler-a", 6)
+		req.Role, req.Owner, req.MaxDevices = "sampler", "job-a", 1
+		return req
+	}
+	pendingSibling := func() *Claim {
+		c := &Claim{Name: "c-trainer-a"}
+		c.Book("trainer-a", "job-a", 0, true)
+		return c
+	}
+	for _, tc := range []struct {
+		name   string
+		req    func() Request
+		claims func() []*Claim
+		want   string
+	}{
+		{
+			name:   "sibling's unallocated claim",
+			req:    sampler,
+			claims: func() []*Claim { return []*Claim{pendingSibling()} },
+			want:   "c-trainer-a",
+		},
+		{
+			name: "no owner",
+			req: func() Request {
+				req := sampler()
+				req.Owner = ""
+				return req
+			},
+			claims: func() []*Claim { return []*Claim{pendingSibling()} },
+		},
+		{
+			name: "exclusive worker",
+			req: func() Request {
+				req := sampler()
+				req.Shareable = false
+				return req
+			},
+			claims: func() []*Claim { return []*Claim{pendingSibling()} },
+		},
+		{
+			name: "multi-device group",
+			req: func() Request {
+				req := sampler()
+				req.Devices = 2
+				return req
+			},
+			claims: func() []*Claim { return []*Claim{pendingSibling()} },
+		},
+		{
+			name: "own seat on the pending claim",
+			req:  sampler,
+			claims: func() []*Claim {
+				c := pendingSibling()
+				c.Book("sampler-a", "job-a", 0, true)
+				return []*Claim{c}
+			},
+		},
+		{
+			name: "own seat on another claim",
+			req:  sampler,
+			claims: func() []*Claim {
+				own := &Claim{Name: "c-sampler-a"}
+				own.Book("sampler-a", "job-a", 0, true)
+				return []*Claim{pendingSibling(), own}
+			},
+		},
+		{
+			name: "sibling's claim is allocated",
+			req:  sampler,
+			claims: func() []*Claim {
+				c := pendingSibling()
+				c.Node, c.DeviceCount = "n", 1
+				return []*Claim{c}
+			},
+		},
+		{
+			name: "sibling cannot share",
+			req:  sampler,
+			claims: func() []*Claim {
+				c := &Claim{Name: "c-trainer-a"}
+				c.Book("trainer-a", "job-a", 0, false)
+				return []*Claim{c}
+			},
+		},
+		{
+			name: "another owner's unallocated claim",
+			req:  sampler,
+			claims: func() []*Claim {
+				c := &Claim{Name: "c-trainer-b"}
+				c.Book("trainer-b", "job-b", 0, true)
+				return []*Claim{c}
+			},
+		},
+		{
+			name: "an allocated claim already holds the owner",
+			req:  sampler,
+			claims: func() []*Claim {
+				placed := &Claim{Name: "c-placed", Node: "n", DeviceCount: 1}
+				placed.Book("reference-a", "job-a", 0, true)
+				return []*Claim{pendingSibling(), placed}
+			},
+		},
+		{
+			name: "lowest name among several",
+			req:  sampler,
+			claims: func() []*Claim {
+				other := &Claim{Name: "b-trainer-a"}
+				other.Book("trainer-a2", "job-a", 0, true)
+				return []*Claim{pendingSibling(), other}
+			},
+			want: "b-trainer-a",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fleet := NewFleet()
+			fleet.Nodes["n"] = l4Node("n", "trainer", "sampler")
+			for _, c := range tc.claims() {
+				fleet.Claims[c.Name] = c
+			}
+			if got := OwnerClaimPending(tc.req(), fleet); name(got) != tc.want {
+				t.Errorf("OwnerClaimPending = %q, want %q", name(got), tc.want)
+			}
+		})
+	}
+}
+
 // Tight fit lives in the tier order: the tier wasting the least device
 // memory leads, so small work prefers small devices -- a preference DRA
 // honors when it can, never a survey of what is free.

@@ -260,14 +260,13 @@ func (r *WorkloadReconciler) ensurePlacementClaim(ctx context.Context, scope *pl
 	worker := scope.worker
 	if scope.claimName == "" {
 		claim, seat, verb, err := r.assign(ctx, worker, scope.request, scope.fleet)
-		if errors.Is(err, errClaimTerminating) {
-			// This is a wait, not a capacity verdict, so the placement
-			// timeout does not apply.
-			reason := "WaitingForPredecessorClaim: " + err.Error()
-			return placementPhaseResult{done: true, result: ctrl.Result{RequeueAfter: r.RetryInterval}}, r.patchStatus(ctx, worker, func(status *openrlv1alpha1.WorkloadStatus) {
-				status.Phase, status.Reason = openrlv1alpha1.PhasePending, reason
-				setCondition(status, metav1.ConditionFalse, "WaitingForPredecessorClaim", reason)
-			})
+		switch {
+		case errors.Is(err, errClaimTerminating):
+			return r.waitPending(ctx, worker, "WaitingForPredecessorClaim", err)
+		case errors.Is(err, errOwnerClaimPending):
+			return r.waitPending(ctx, worker, "WaitingForOwnerClaim", err)
+		case errors.Is(err, errOwnerSiblingFirst):
+			return r.waitPending(ctx, worker, "WaitingForOwnerSibling", err)
 		}
 		if err != nil {
 			return placementPhaseResult{}, err
@@ -303,6 +302,17 @@ func (r *WorkloadReconciler) ensurePlacementClaim(ctx context.Context, scope *pl
 	return placementPhaseResult{}, r.patchStatus(ctx, worker, func(status *openrlv1alpha1.WorkloadStatus) {
 		status.ClaimName = scope.claimName
 		status.AssignmentID = seat.AssignmentID
+	})
+}
+
+// waitPending parks an unassigned worker until another object changes state.
+// This is a wait, not a capacity verdict, so the placement timeout does not
+// apply.
+func (r *WorkloadReconciler) waitPending(ctx context.Context, worker *openrlv1alpha1.Workload, condition string, cause error) (placementPhaseResult, error) {
+	reason := condition + ": " + cause.Error()
+	return placementPhaseResult{done: true, result: ctrl.Result{RequeueAfter: r.RetryInterval}}, r.patchStatus(ctx, worker, func(status *openrlv1alpha1.WorkloadStatus) {
+		status.Phase, status.Reason = openrlv1alpha1.PhasePending, reason
+		setCondition(status, metav1.ConditionFalse, condition, reason)
 	})
 }
 
@@ -570,6 +580,24 @@ func (r *WorkloadReconciler) assign(ctx context.Context, worker *openrlv1alpha1.
 	case placement.StrategySpread:
 		return r.cutDedicatedClaim(ctx, worker, request, fleet)
 	case "", placement.StrategyBinPack:
+		// Wait for a sibling's claim rather than pair with another owner. Any
+		// managed claim event wakes every worker, so this re-reconciles the
+		// moment DRA allocates it, or when the sibling gives it up.
+		if pending := placement.OwnerClaimPending(request, fleet); pending != nil {
+			return nil, nil, "", fmt.Errorf("%w: %s", errOwnerClaimPending, pending.Name)
+		}
+		// Siblings created together reconcile concurrently and would each cut
+		// a claim; only the smallest name places, the rest wait for its claim.
+		if placement.MayWaitForOwner(request, fleet) {
+			var workers openrlv1alpha1.WorkloadList
+			// The cache is enough: a stale read costs one requeue.
+			if err := r.List(ctx, &workers, client.InNamespace(r.Namespace)); err != nil {
+				return nil, nil, "", fmt.Errorf("list workloads: %w", err)
+			}
+			if leader := ownerLeader(worker, workers.Items); leader != "" {
+				return nil, nil, "", fmt.Errorf("%w: %s", errOwnerSiblingFirst, leader)
+			}
+		}
 		target, seat, err := r.joinExistingClaim(ctx, worker, request, fleet, "")
 		if err != nil {
 			return nil, nil, "", err
@@ -587,6 +615,41 @@ func (r *WorkloadReconciler) assign(ctx context.Context, worker *openrlv1alpha1.
 // errClaimTerminating means the worker's previous dedicated claim is still
 // being deleted. It is a wait, not a capacity verdict.
 var errClaimTerminating = errors.New("the worker's previous claim is still being deleted")
+
+// ownerLeader is the unplaced same-owner sibling this worker defers to, or ""
+// when the worker leads: the smallest name below the worker's own among
+// shareable single-device workloads with its owner ID that are not deleting,
+// not failed, and not yet assigned a claim.
+func ownerLeader(worker *openrlv1alpha1.Workload, workers []openrlv1alpha1.Workload) string {
+	if worker.Spec.OwnerID == "" {
+		return ""
+	}
+	leader := ""
+	for i := range workers {
+		sibling := &workers[i]
+		if sibling.Name >= worker.Name || sibling.Spec.OwnerID != worker.Spec.OwnerID {
+			continue
+		}
+		if !sibling.DeletionTimestamp.IsZero() || sibling.Status.Phase == openrlv1alpha1.PhaseFailed || sibling.Status.ClaimName != "" {
+			continue
+		}
+		if request := requestFrom(sibling); !request.Shareable || request.Devices > 0 {
+			continue
+		}
+		if leader == "" || sibling.Name < leader {
+			leader = sibling.Name
+		}
+	}
+	return leader
+}
+
+// errOwnerSiblingFirst means an unplaced same-owner workload with a smaller
+// name places first. It is a wait, not a capacity verdict.
+var errOwnerSiblingFirst = errors.New("a same-owner workload with a smaller name places first")
+
+// errOwnerClaimPending means a worker of the same owner holds a shareable
+// claim DRA has not allocated yet. It is a wait, not a capacity verdict.
+var errOwnerClaimPending = errors.New("a worker of the same owner holds a claim DRA has not allocated yet")
 
 // cutDedicatedClaim books the first seat, then creates an ordered set of DRA alternatives.
 func (r *WorkloadReconciler) cutDedicatedClaim(ctx context.Context, worker *openrlv1alpha1.Workload, request placement.Request, fleet *placement.Fleet) (*placement.Claim, *openrlv1alpha1.Seat, string, error) {

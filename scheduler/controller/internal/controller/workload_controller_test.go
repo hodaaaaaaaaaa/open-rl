@@ -795,10 +795,10 @@ func TestReconcileRunsATrainerAndASamplerOnOneClaim(t *testing.T) {
 
 // Workers under contention, two owners between them. The owner is a string
 // the caller chooses and the scheduler only ever compares: same string means
-// one fairness slot at runtime, different string means separate turns. It
-// never shapes placement -- the controller has no table of which workload
-// kinds may share, and contention spreads to the claim with the fewest
-// assigned workers.
+// one fairness slot at runtime, different string means separate turns. In
+// placement it is only an affinity -- the controller has no table of which
+// workload kinds may share -- so a joiner prefers the claim its owner holds,
+// and otherwise the claim with the fewest assigned owners and workers.
 //
 // The filler takes the second device, so everything after w-a shares.
 func TestReconcileGroupsWorkersByTheirOwnerID(t *testing.T) {
@@ -818,8 +818,8 @@ func TestReconcileGroupsWorkersByTheirOwnerID(t *testing.T) {
 	fallBackToSharing(t, r, "w-b")
 	fallBackToSharing(t, r, "w-c")
 
-	// w-b joins the least-loaded claim by name; w-c then finds the filler's
-	// claim emptier. Owner never enters the placement decision.
+	// w-b joins the claim its owner holds; w-c, whose owner holds none,
+	// finds the filler's claim emptier.
 	claim := claimOf(t, r, "w-a")
 	if b := claimOf(t, r, "w-b"); b != claim {
 		t.Fatalf("w-b landed on %q and w-a on %q, want the shared claim", b, claim)
@@ -840,6 +840,193 @@ func TestReconcileGroupsWorkersByTheirOwnerID(t *testing.T) {
 	}
 	if a, c := owner("w-a"), owner("w-c"); a == c {
 		t.Errorf("both pods are in owner %q, but they serve different base models", a)
+	}
+}
+
+// samplerOf is the sampler half of an RL job: same owner as its trainer.
+func samplerOf(name, modelID, owner string) *openrlv1alpha1.Workload {
+	w := worker(name, modelID, openrlv1alpha1.RoleSampler, "24Gi")
+	w.Spec.OwnerID = owner
+	return w
+}
+
+// countClaims is how many ResourceClaims exist in the worker namespace.
+func countClaims(t *testing.T, r *WorkloadReconciler) int {
+	t.Helper()
+	var claims resourcev1.ResourceClaimList
+	if err := r.List(context.Background(), &claims, client.InNamespace(testNamespace)); err != nil {
+		t.Fatalf("list claims: %v", err)
+	}
+	return len(claims.Items)
+}
+
+// Under binpack, a sampler whose trainer's claim DRA has not allocated yet
+// waits for it instead of cutting a claim of its own; a second claim would
+// pair each half of the job with another job's worker. The wait is not a
+// capacity verdict, so the placement clock does not run. Once the claim
+// allocates, the sampler joins it. The trainer's name sorts first, so it
+// leads and places without waiting for the sampler.
+func TestBinPackWaitsForTheOwnersPendingClaim(t *testing.T) {
+	trainer := ownedWorker("w-a-trainer", "model-a", "job-a")
+	sampler := samplerOf("w-b-sampler", "model-a", "job-a")
+	sampler.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
+	r := newReconciler(t, append(enabledNode(), trainer, sampler)...)
+	r.PlacementStrategy = placement.StrategyBinPack
+	r.PlacementTimeout = time.Minute
+
+	settle(t, r, "w-a-trainer")
+	pending := claimOf(t, r, "w-a-trainer")
+
+	result := runReconcile(t, r, "w-b-sampler")
+	if result.RequeueAfter != r.RetryInterval {
+		t.Errorf("requeueAfter = %v, want %v", result.RequeueAfter, r.RetryInterval)
+	}
+	waiting := getWorker(t, r, "w-b-sampler")
+	if waiting.Status.Phase != openrlv1alpha1.PhasePending ||
+		!strings.HasPrefix(waiting.Status.Reason, "WaitingForOwnerClaim") || !strings.Contains(waiting.Status.Reason, pending) {
+		t.Fatalf("status = %s %q, want Pending WaitingForOwnerClaim on %s despite the expired clock", waiting.Status.Phase, waiting.Status.Reason, pending)
+	}
+	if waiting.Status.ClaimName != "" {
+		t.Errorf("waiting sampler was assigned %q", waiting.Status.ClaimName)
+	}
+	if n := countClaims(t, r); n != 1 {
+		t.Errorf("%d claims exist, want only the trainer's", n)
+	}
+	expectGone(t, r, &openrlv1alpha1.ClaimLedger{}, ledgerNameFor(claimNameFor(sampler)))
+
+	allocateClaim(t, r, pending)
+	settle(t, r, "w-b-sampler")
+	if got := claimOf(t, r, "w-b-sampler"); got != pending {
+		t.Fatalf("sampler landed on %q, want its trainer's %q", got, pending)
+	}
+	if n := countClaims(t, r); n != 1 {
+		t.Errorf("%d claims exist, want the one shared by trainer and sampler", n)
+	}
+}
+
+// Siblings created together reconcile concurrently, before either has a
+// claim to wait on. Only the smallest name places; the other waits for it,
+// then for its claim, then joins it. Nothing here depends on which of the
+// two reconciles first.
+func TestBinPackSiblingsDeferToTheSmallestName(t *testing.T) {
+	sampler := samplerOf("job-a-sampler", "model-a", "job-a")
+	trainer := ownedWorker("job-a-trainer", "model-a", "job-a")
+	trainer.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
+	r := newReconciler(t, append(enabledNode(), sampler, trainer)...)
+	r.PlacementStrategy = placement.StrategyBinPack
+	r.PlacementTimeout = time.Minute
+
+	result := runReconcile(t, r, "job-a-trainer")
+	if result.RequeueAfter != r.RetryInterval {
+		t.Errorf("requeueAfter = %v, want %v", result.RequeueAfter, r.RetryInterval)
+	}
+	waiting := getWorker(t, r, "job-a-trainer")
+	if waiting.Status.Phase != openrlv1alpha1.PhasePending ||
+		!strings.HasPrefix(waiting.Status.Reason, "WaitingForOwnerSibling") || !strings.Contains(waiting.Status.Reason, "job-a-sampler") {
+		t.Fatalf("status = %s %q, want Pending WaitingForOwnerSibling on job-a-sampler despite the expired clock", waiting.Status.Phase, waiting.Status.Reason)
+	}
+	if n := countClaims(t, r); n != 0 {
+		t.Fatalf("%d claims exist, want none until the leader places", n)
+	}
+
+	settle(t, r, "job-a-sampler")
+	leaderClaim := claimOf(t, r, "job-a-sampler")
+	runReconcile(t, r, "job-a-trainer")
+	if reason := getWorker(t, r, "job-a-trainer").Status.Reason; !strings.HasPrefix(reason, "WaitingForOwnerClaim") {
+		t.Fatalf("trainer reason = %q, want WaitingForOwnerClaim once the leader has a claim", reason)
+	}
+
+	allocateClaim(t, r, leaderClaim)
+	settle(t, r, "job-a-trainer")
+	if got := claimOf(t, r, "job-a-trainer"); got != leaderClaim {
+		t.Fatalf("trainer landed on %q, want the leader's %q", got, leaderClaim)
+	}
+	if n := countClaims(t, r); n != 1 {
+		t.Errorf("%d claims exist, want one shared by the pair", n)
+	}
+}
+
+// A failed leader never places, so its sibling stops waiting for it.
+func TestBinPackSiblingProceedsPastAFailedLeader(t *testing.T) {
+	sampler := samplerOf("job-a-sampler", "model-a", "job-a")
+	sampler.Status.Phase = openrlv1alpha1.PhaseFailed
+	trainer := ownedWorker("job-a-trainer", "model-a", "job-a")
+	r := newReconciler(t, append(enabledNode(), sampler, trainer)...)
+	r.PlacementStrategy = placement.StrategyBinPack
+
+	settle(t, r, "job-a-trainer")
+	if got := claimOf(t, r, "job-a-trainer"); got != claimNameFor(trainer) {
+		t.Fatalf("trainer placed on %q, want its own claim %q", got, claimNameFor(trainer))
+	}
+}
+
+func TestOwnerLeader(t *testing.T) {
+	self := ownedWorker("job-a-trainer", "model-a", "job-a")
+	sibling := func(name string, mutate func(*openrlv1alpha1.Workload)) openrlv1alpha1.Workload {
+		w := samplerOf(name, "model-a", "job-a")
+		if mutate != nil {
+			mutate(w)
+		}
+		return *w
+	}
+	now := metav1.Now()
+	for _, tc := range []struct {
+		name     string
+		self     *openrlv1alpha1.Workload
+		siblings []openrlv1alpha1.Workload
+		want     string
+	}{
+		{"unplaced smaller sibling leads", self, []openrlv1alpha1.Workload{*self, sibling("job-a-sampler", nil)}, "job-a-sampler"},
+		{"smallest of several", self, []openrlv1alpha1.Workload{sibling("job-a-s2", nil), sibling("job-a-s1", nil)}, "job-a-s1"},
+		{"larger name follows", self, []openrlv1alpha1.Workload{sibling("job-a-zz", nil)}, ""},
+		{"other owner", self, []openrlv1alpha1.Workload{sibling("job-a-sampler", func(w *openrlv1alpha1.Workload) { w.Spec.OwnerID = "job-b" })}, ""},
+		{"failed", self, []openrlv1alpha1.Workload{sibling("job-a-sampler", func(w *openrlv1alpha1.Workload) { w.Status.Phase = openrlv1alpha1.PhaseFailed })}, ""},
+		{"deleting", self, []openrlv1alpha1.Workload{sibling("job-a-sampler", func(w *openrlv1alpha1.Workload) { w.DeletionTimestamp = &now })}, ""},
+		{"already assigned", self, []openrlv1alpha1.Workload{sibling("job-a-sampler", func(w *openrlv1alpha1.Workload) { w.Status.ClaimName = "c" })}, ""},
+		{"exclusive", self, []openrlv1alpha1.Workload{sibling("job-a-sampler", func(w *openrlv1alpha1.Workload) { w.Spec.Exclusive = true })}, ""},
+		{"multi-GPU", self, []openrlv1alpha1.Workload{sibling("job-a-sampler", func(w *openrlv1alpha1.Workload) {
+			w.Spec.Accelerator.Mode, w.Spec.Accelerator.Devices = openrlv1alpha1.AcceleratorModeMultiGPU, 2
+		})}, ""},
+		{"no owner", trainerWorker("job-a-trainer", "model-a"), []openrlv1alpha1.Workload{*trainerWorker("job-a-sampler", "model-a")}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ownerLeader(tc.self, tc.siblings); got != tc.want {
+				t.Errorf("ownerLeader = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The owner waits are binpack's, for workers that share. An exclusive worker
+// on either side, and anything under spread, cut their own claims as before,
+// whichever sibling reconciles first.
+func TestOwnerWaitAppliesOnlyToSharingWorkersUnderBinPack(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		strategy         placement.Strategy
+		exclusiveSampler bool
+		exclusiveTrainer bool
+	}{
+		{"exclusive leader under binpack", placement.StrategyBinPack, true, false},
+		{"exclusive follower under binpack", placement.StrategyBinPack, false, true},
+		{"sharing under spread", placement.StrategySpread, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The trainer's name sorts last, so it would follow the sampler.
+			sampler := samplerOf("w-s", "model-a", "job-a")
+			sampler.Spec.Exclusive = tc.exclusiveSampler
+			trainer := ownedWorker("w-t", "model-a", "job-a")
+			trainer.Spec.Exclusive = tc.exclusiveTrainer
+			r := newReconciler(t, append(enabledNode(), sampler, trainer)...)
+			r.PlacementStrategy = tc.strategy
+
+			settle(t, r, "w-t", "w-s")
+			for _, w := range []*openrlv1alpha1.Workload{trainer, sampler} {
+				if got := claimOf(t, r, w.Name); got != claimNameFor(w) {
+					t.Fatalf("%s placed on %q, want its own claim %q", w.Name, got, claimNameFor(w))
+				}
+			}
+		})
 	}
 }
 

@@ -139,6 +139,16 @@ func (c *Claim) Booked(workerID string) bool {
 	return ok
 }
 
+// HoldsOwner reports whether any worker on the claim books under this owner.
+func (c *Claim) HoldsOwner(owner string) bool {
+	for _, b := range c.booked {
+		if b.owner == owner {
+			return true
+		}
+	}
+	return false
+}
+
 // Owners is how many distinct fairness units are assigned to this claim.
 func (c *Claim) Owners() int {
 	owners := map[string]bool{}
@@ -184,8 +194,9 @@ type Request struct {
 	// Memory is the total accelerator memory the worker needs, across however
 	// many devices it ends up on.
 	Memory int64
-	// Owner is the runtime fairness unit. Placement never reads it; the
-	// timeslicer does.
+	// Owner is the runtime fairness unit the timeslicer serves. Placement
+	// reads it only for owner affinity: workers of one owner alternate GPU
+	// phases, so they are packed onto one claim when they share.
 	Owner string
 	// WorkerID identifies the worker. Required, and required to be unique.
 	WorkerID string
@@ -293,9 +304,9 @@ func candidateNodes(req Request, fleet *Fleet) map[string]int {
 
 // SelectClaim picks the allocated claim a worker should join, or nil:
 // single-device only, role and host-memory checked -- host memory is the one
-// ceiling on how many workers may park on a node -- preferring fewest owners,
-// then fewest workers, then name. Advisory -- the ledger's CAS booking is what
-// makes it stick.
+// ceiling on how many workers may park on a node -- preferring a claim its
+// owner already holds, then fewest owners, then fewest workers, then name.
+// Advisory -- the ledger's CAS booking is what makes it stick.
 func SelectClaim(req Request, fleet *Fleet) *Claim {
 	if !req.Shareable || req.Devices > 0 {
 		return nil
@@ -316,6 +327,7 @@ func SelectClaim(req Request, fleet *Fleet) *Claim {
 		}
 	}
 
+	owner := req.OwnerKey()
 	var best *Claim
 	for _, claim := range fleet.Claims {
 		node := fleet.Nodes[claim.Node]
@@ -336,16 +348,21 @@ func SelectClaim(req Request, fleet *Fleet) *Claim {
 		if node.HostMemoryBytes > 0 && hostByNode[node.Name]+req.HostRequestBytes > node.HostMemoryBytes {
 			continue
 		}
-		if best == nil || claimLess(claim, best) {
+		if best == nil || claimLess(claim, best, owner) {
 			best = claim
 		}
 	}
 	return best
 }
 
-// claimLess orders eligible claims: fewer assigned owners first (joining the
-// least-contended fairness pool), then fewer workers, then name.
-func claimLess(a, b *Claim) bool {
+// claimLess orders eligible claims: one already holding the worker's owner
+// first (same-owner workers alternate phases, so they cost each other little),
+// then fewer assigned owners (the least-contended fairness pool), then fewer
+// workers, then name.
+func claimLess(a, b *Claim, owner string) bool {
+	if aHolds, bHolds := a.HoldsOwner(owner), b.HoldsOwner(owner); aHolds != bHolds {
+		return aHolds
+	}
 	if a.Owners() != b.Owners() {
 		return a.Owners() < b.Owners()
 	}
@@ -353,6 +370,49 @@ func claimLess(a, b *Claim) bool {
 		return a.Workers() < b.Workers()
 	}
 	return a.Name < b.Name
+}
+
+// MayWaitForOwner reports whether a worker may defer its placement to a
+// worker of the same owner: a shareable single-device request naming an
+// owner, holding no seat anywhere (two seated workers could wait on each
+// other), and with no allocated claim of its owner that SelectClaim would
+// seat it on now.
+func MayWaitForOwner(req Request, fleet *Fleet) bool {
+	if !req.Shareable || req.Devices > 0 || req.Owner == "" {
+		return false
+	}
+	for _, claim := range fleet.Claims {
+		if claim.Booked(req.WorkerID) {
+			return false
+		}
+	}
+	join := SelectClaim(req, fleet)
+	return join == nil || !join.HoldsOwner(req.OwnerKey())
+}
+
+// OwnerClaimPending returns a claim the worker should wait on instead of
+// placing itself, or nil: a shareable claim DRA has not allocated yet that
+// holds a seat of the worker's owner. Once it allocates, SelectClaim seats
+// the worker beside its sibling; placing now would pair each with another
+// owner's worker. Nil whenever MayWaitForOwner is false.
+func OwnerClaimPending(req Request, fleet *Fleet) *Claim {
+	if req.Owner == "" {
+		return nil
+	}
+	owner := req.OwnerKey()
+	var pending *Claim
+	for _, claim := range fleet.Claims {
+		if claim.Allocated() || !claim.Shareable() || !claim.HoldsOwner(owner) {
+			continue
+		}
+		if pending == nil || claim.Name < pending.Name {
+			pending = claim
+		}
+	}
+	if pending == nil || !MayWaitForOwner(req, fleet) {
+		return nil
+	}
+	return pending
 }
 
 // Explain says why this worker is not running. "Busy, retry" and "too small,
