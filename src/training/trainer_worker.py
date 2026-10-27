@@ -77,10 +77,9 @@ class BaseTrainerWorker:
     """
     loss_fn_outputs: list[dict[str, Any] | None] = [None] * len(data)
 
-    if forward_only:
-      model.eval()
-    else:
-      model.train()
+    # train() and eval() walk every module, so switch only when the mode changes.
+    if model.training == forward_only:
+      model.train(not forward_only)
 
     with torch.set_grad_enabled(not forward_only):
       total_loss = self._run_batches(model, data, loss_fn, loss_config, forward_only, loss_fn_outputs)
