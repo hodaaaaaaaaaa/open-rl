@@ -1,5 +1,6 @@
 # LoRA trainer worker lifecycle and adapter management.
 
+import contextlib
 import json
 import math
 import os
@@ -11,6 +12,7 @@ from typing import Any
 import torch
 from peft import LoraConfig as PeftLoraConfig
 from peft import PeftModelForCausalLM, get_peft_model
+from peft.tuners.tuners_utils import BaseTunerLayer
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel
 
 from training.trainer_worker import BaseTrainerWorker, Datum
@@ -38,6 +40,32 @@ class LoraTrainingWorker(BaseTrainerWorker):
 
   def is_ready(self) -> bool:
     return self.base_model is not None
+
+  def half_precision(self) -> torch.dtype | None:
+    """The base model's dtype when passes run under autocast to it: a bf16 or fp16 model on CUDA."""
+    dtype = self.base_model.dtype if self.base_model is not None else None
+    if self.device.type == "cuda" and dtype in (torch.bfloat16, torch.float16):
+      return dtype
+    return None
+
+  def autocast(self) -> contextlib.AbstractContextManager:
+    """Run the LoRA matmuls in the base model's precision.
+
+    PEFT keeps adapters in fp32 and casts every input up to it, so on a bf16
+    model the LoRA path runs as fp32 matmuls plus casts, about a third of a
+    small model's step. Under autocast it runs in bf16 while the adapter
+    weights, their gradients and the optimizer stay fp32.
+    """
+    dtype = self.half_precision()
+    return torch.autocast("cuda", dtype=dtype) if dtype is not None else contextlib.nullcontext()
+
+  def stop_lora_input_casts(self) -> None:
+    """Under autocast PEFT's casts of each input to fp32 are copies the matmul discards."""
+    if self.half_precision() is None:
+      return
+    for module in self.peft_model.modules():
+      if isinstance(module, BaseTunerLayer):
+        module.cast_input_dtype_enabled = False
 
   def load_base_model(self, base_model_name: str) -> None:
     """Eagerly load the massive base model tensors into VRAM."""
@@ -125,6 +153,7 @@ class LoraTrainingWorker(BaseTrainerWorker):
       self.peft_model = get_peft_model(self.base_model, peft_config, adapter_name=adapter_id)
     else:
       self.peft_model.add_adapter(adapter_id, peft_config)
+    self.stop_lora_input_casts()
 
     self.peft_model.set_adapter(adapter_id)
     self.adapter_states[adapter_id] = {"trainable_params": active_adapter_parameters(self.peft_model, adapter_id), "optimizer": None}
@@ -245,6 +274,7 @@ class LoraTrainingWorker(BaseTrainerWorker):
         if model_id in self.adapter_states:
           del self.adapter_states[model_id]
       self.peft_model.load_adapter(adapter_dir, adapter_name=model_id, is_trainable=True)
+    self.stop_lora_input_casts()
 
     self.peft_model.set_adapter(model_id)
     params = active_adapter_parameters(self.peft_model, model_id)
@@ -279,7 +309,8 @@ class LoraTrainingWorker(BaseTrainerWorker):
     assert self.peft_model is not None, "Model must be loaded first."
     if model_id:
       self.peft_model.set_adapter(model_id)
-    return super().forward_backward(self.peft_model, data, loss_fn, loss_config, forward_only=forward_only)
+    with self.autocast():
+      return super().forward_backward(self.peft_model, data, loss_fn, loss_config, forward_only=forward_only)
 
   def optim_step(self, adam_params: dict[str, Any], model_id: str) -> dict[str, Any]:
     """Apply accumulated gradients and update model weights."""
@@ -347,4 +378,5 @@ class LoraTrainingWorker(BaseTrainerWorker):
   ) -> dict[str, Any]:
     if model_id:
       self.peft_model.set_adapter(model_id)
-    return super().generate(self.peft_model, prompt_tokens, max_tokens, num_samples, temperature, include_prompt_logprobs)
+    with self.autocast():
+      return super().generate(self.peft_model, prompt_tokens, max_tokens, num_samples, temperature, include_prompt_logprobs)
