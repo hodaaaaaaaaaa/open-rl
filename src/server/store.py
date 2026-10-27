@@ -12,6 +12,11 @@ import redis as sync_redis
 import redis.asyncio as redis
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
+# A shared trainer serves these before its round-robin. They are cheap, and a job
+# waits for its save before it can sample its next step, so serving one late
+# idles that job while the trainer works through every other job's queue.
+SAVES_FIRST_OPS = {"save_weights_for_sampler"}
+
 
 class RequestStore(ABC):
   """Request queues and results, keyed by request ID."""
@@ -62,6 +67,8 @@ class InMemoryStore(RequestStore):
     self.futures_store: dict[str, dict[str, Any]] = {}
     self.futures_cv = asyncio.Condition()
     self.sampling_queues: dict[str, asyncio.Queue] = {}
+    # active_set_id -> tenants with a queued save, served before the round-robin
+    self.saves_first: dict[str, list[str]] = {}
 
   async def put_request(self, req_data: dict[str, Any], active_set_id: str | None = None) -> None:
     model_id = req_data.get("model_id", "default")
@@ -72,6 +79,8 @@ class InMemoryStore(RequestStore):
         self.queues[model_id] = asyncio.Queue()
 
       await self.queues[model_id].put(req_data)
+      if req_data.get("op") in SAVES_FIRST_OPS:
+        self.saves_first.setdefault(set_key, []).append(model_id)
 
       tenants_list = self.active_tenants.setdefault(set_key, [])
       if model_id not in tenants_list:
@@ -81,6 +90,13 @@ class InMemoryStore(RequestStore):
   async def get_requests(self, active_set_id: str | None = None) -> list[dict[str, Any]]:
     async with self.active_tenants_cv:
       while True:
+        for set_key in [active_set_id] if active_set_id else list(self.saves_first):
+          saves = self.saves_first.get(set_key, [])
+          while saves:
+            queue = self.queues[saves.pop(0)]
+            if pending := queue.qsize():
+              return [queue.get_nowait() for _ in range(pending)]
+
         tenants_list = None
         if active_set_id:
           tenants_list = self.active_tenants.get(active_set_id)
@@ -161,6 +177,8 @@ class RedisStore(RequestStore):
 
     # 1. Add request to tenant-specific list
     await self.redis.rpush(queue_key, json.dumps(req_data))
+    if req_data.get("op") in SAVES_FIRST_OPS:
+      await self.redis.rpush(self.saves_first_key(active_set_id), model_id)
 
     # 2. Add tenant to active set and list if not already there
     # SADD returns 1 if it was newly added, 0 if it already existed
@@ -171,6 +189,14 @@ class RedisStore(RequestStore):
   async def get_requests(self, active_set_id: str | None = None) -> list[dict[str, Any]]:
     active_set = f"open_rl:active_tenants_set:{active_set_id}" if active_set_id else self.active_set
     active_list = f"open_rl:active_tenants:{active_set_id}" if active_set_id else self.active_list
+
+    # A tenant with a queued save goes first and keeps its place in the round-robin.
+    while saver := await self.redis.lpop(self.saves_first_key(active_set_id)):
+      queue_key = f"open_rl:queue:{saver.decode() if isinstance(saver, bytes) else saver}"
+      if q_len := await self.redis.llen(queue_key):
+        batch = [json.loads(item) for item in await self.redis.lpop(queue_key, q_len) or []]
+        if batch:
+          return batch
 
     while True:
       model_id_bytes = await self.redis.lindex(active_list, 0)
@@ -208,6 +234,9 @@ class RedisStore(RequestStore):
         # afterwards keeps a continuously-enqueueing tenant from starving peers.
         await self.redis.lmove(active_list, active_list, "LEFT", "RIGHT")
         return batch
+
+  def saves_first_key(self, active_set_id: str | None) -> str:
+    return f"open_rl:saves_first:{active_set_id}" if active_set_id else "open_rl:saves_first"
 
   async def get_requests_for_model(self, model_id: str) -> list[dict[str, Any]]:
     queue_key = f"open_rl:queue:{model_id}"

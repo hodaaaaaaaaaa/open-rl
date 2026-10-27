@@ -105,6 +105,14 @@ class RedisFutureTest(unittest.IsolatedAsyncioTestCase):
     await self.store.set_result("req-1", {"status": "pending"})
     self.assertEqual((await self.store.get_result("req-1", timeout=0.3))["type"], "try_again")
 
+  async def test_a_queued_save_is_served_before_the_round_robin(self) -> None:
+    for tenant in ("tenant-a", "tenant-b"):
+      await self.store.put_request({"model_id": tenant, "request_id": f"{tenant}-fb", "op": "forward_backward"}, active_set_id="base-1")
+    await self.store.put_request({"model_id": "tenant-c", "request_id": "c-save", "op": "save_weights_for_sampler"}, active_set_id="base-1")
+    self.assertEqual([r["request_id"] for r in await self.store.get_requests(active_set_id="base-1")], ["c-save"])
+    self.assertEqual([r["request_id"] for r in await self.store.get_requests(active_set_id="base-1")], ["tenant-a-fb"])
+    self.assertEqual([r["request_id"] for r in await self.store.get_requests(active_set_id="base-1")], ["tenant-b-fb"])
+
   async def test_get_requests_rotates_between_tenants(self) -> None:
     for i in range(3):
       await self.store.put_request({"model_id": "tenant-a", "request_id": f"a{i}"}, active_set_id="base-1")
