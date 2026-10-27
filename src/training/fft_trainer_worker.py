@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 from datetime import datetime
 from typing import Any
@@ -47,6 +48,9 @@ class FFTTrainingWorker(BaseTrainerWorker):
     self._param_shadow: dict[torch.nn.Parameter, tuple[torch.device, torch.Tensor]] = {}
     self._grad_shadow: dict[torch.nn.Parameter, tuple[torch.device, torch.Tensor]] = {}
     self._opt_shadow: dict[tuple[torch.nn.Parameter, str], tuple[torch.device, torch.Tensor]] = {}
+    # Pinned host buffers for the first offload of gradients and AdamW state, filled in the background.
+    self._spare_buffers: dict[tuple[torch.nn.Parameter, str], torch.Tensor] = {}
+    self._spare_filler: threading.Thread | None = None
     self._prev_weights_shadow: dict[str, torch.Tensor] = {}
     self.model_layer_shapes: dict[str, tuple[int, ...]] = {}
     self.total_model_elements: int = 0
@@ -124,6 +128,35 @@ class FFTTrainingWorker(BaseTrainerWorker):
         print(f"Failed to enable gradient checkpointing: {e}")
 
     self.model.train()
+
+  # AdamW keeps these two per-parameter states, each shaped and typed like the parameter.
+  ADAMW_STATE_KEYS = ("exp_avg", "exp_avg_sq")
+
+  def _start_filling_spare_buffers(self) -> None:
+    if self._spare_filler is None and not self._spare_buffers and self.trainable_params:
+      self._spare_filler = threading.Thread(target=self._fill_spare_buffers, name="pin-offload-buffers", daemon=True)
+      self._spare_filler.start()
+
+  def _fill_spare_buffers(self) -> None:
+    """Pin host buffers for gradients and AdamW state while the trainer waits for its first step.
+
+    Pinning tens of GB takes seconds, and the first offload after a backward and
+    after an optimizer step would otherwise pay it on the job's first step. It
+    starts after the first offload: pinning alongside an offload slows both.
+    """
+    for param in self.trainable_params:
+      for key in ("grad", *self.ADAMW_STATE_KEYS):
+        self._spare_buffers[(param, key)] = torch.empty(param.shape, dtype=param.dtype, device="cpu", pin_memory=True)
+
+  def _host_buffer(self, tensor: torch.Tensor, owner: torch.nn.Parameter, key: str) -> torch.Tensor:
+    """A pinned host buffer for tensor: the spare pinned for it if one matches, else a new one."""
+    if self._spare_filler is not None:
+      self._spare_filler.join()
+      self._spare_filler = None
+    spare = self._spare_buffers.pop((owner, key), None)
+    if spare is not None and spare.shape == tensor.shape and spare.dtype == tensor.dtype:
+      return spare
+    return torch.empty(tensor.shape, dtype=tensor.dtype, device="cpu", pin_memory=torch.cuda.is_available())
 
   def _prepare_for_save(self) -> bool:
     was_offloaded = self._is_offloaded
@@ -484,7 +517,7 @@ class FFTTrainingWorker(BaseTrainerWorker):
         if tensor in self._grad_shadow and self._grad_shadow[tensor][1].shape == tensor.grad.shape:
           cpu_buf = self._grad_shadow[tensor][1]
         else:
-          cpu_buf = torch.empty(tensor.grad.shape, dtype=tensor.grad.dtype, device="cpu", pin_memory=torch.cuda.is_available())
+          cpu_buf = self._host_buffer(tensor.grad, tensor, "grad")
           self._grad_shadow[tensor] = (orig_device, cpu_buf)
         cpu_buf.copy_(tensor.grad.data, non_blocking=True)
 
@@ -498,7 +531,7 @@ class FFTTrainingWorker(BaseTrainerWorker):
               if opt_key in self._opt_shadow and self._opt_shadow[opt_key][1].shape == v.shape:
                 cpu_buf = self._opt_shadow[opt_key][1]
               else:
-                cpu_buf = torch.empty(v.shape, dtype=v.dtype, device="cpu", pin_memory=torch.cuda.is_available())
+                cpu_buf = self._host_buffer(v, param, k)
                 self._opt_shadow[opt_key] = (orig_device, cpu_buf)
               cpu_buf.copy_(v, non_blocking=True)
 
@@ -532,6 +565,8 @@ class FFTTrainingWorker(BaseTrainerWorker):
 
     self._is_offloaded = True
     print(f"[FFT Worker] Offloaded weights & states to pinned CPU memory in {(time.perf_counter() - start_t) * 1000:.1f} ms.")
+    if self.optimizer is None:
+      self._start_filling_spare_buffers()
 
   def wake_up(self) -> None:
     """Reload pinned CPU shadow tensors back to CUDA VRAM without destroying host shadow buffers."""
