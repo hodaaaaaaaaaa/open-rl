@@ -28,6 +28,7 @@ from training.distributed import close as close_distributed
 from training.distributed import initialize as initialize_distributed
 from training.fft_trainer_worker import FFTTrainingWorker
 from training.lora_trainer_worker import LoraTrainingWorker
+from training.prefetch import prefetch
 
 tracer = trace.get_tracer(__name__)
 
@@ -273,6 +274,7 @@ class TrainingRequestsProcessor:
     save_reqs = [r for r in requests if r.get("op") in save_ops]
 
     if gpu_reqs:
+      await self.prefetch_checkpoints(gpu_reqs)
       async with self.time_slicer.acquire(self.workload):
         await asyncio.to_thread(self.worker.wake_up)
         try:
@@ -306,6 +308,29 @@ class TrainingRequestsProcessor:
     if not self.dedicated or is_distributed():
       return []
     return await self.store.pop_leading_requests_for_model(self.model_id, TURN_FOLLOW_UP_OPS)
+
+  async def prefetch_checkpoints(self, requests: list[dict[str, Any]]) -> None:
+    """Read the checkpoints these requests will load before taking the GPU turn.
+
+    The read needs no GPU, and a time-sliced partner (its sampler building its
+    engine) waits for the turn. A failure here is left to the load to report.
+    """
+    for request in requests:
+      try:
+        command = parse_command(request)
+      except Exception:
+        continue
+      match command:
+        case commands.CreateModel():
+          path = command.base_model
+        case commands.CreateModelFromState():
+          path = command.state_path
+        case _:
+          continue
+      try:
+        await asyncio.to_thread(prefetch, path)
+      except Exception as exc:
+        print(f"[WORKER] Checkpoint prefetch before the GPU turn failed: {exc}")
 
   async def process_request(self, raw_request: dict[str, Any]) -> None:
     request_id, result = await self.handle_request(raw_request)

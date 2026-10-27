@@ -30,6 +30,9 @@ PATTERNS = ("*.safetensors", "*.bin", "*.pt", "*.pth")
 NETWORK_FS = {"nfs", "nfs4", "lustre", "fuse", "fuse.gcsfuse", "cifs", "smb3"}
 # One task per this many bytes, so a few large shards still spread over all threads.
 CHUNK_BYTES = 256 * 1024 * 1024
+# Files this process already read whole, by (path, size, mtime): a checkpoint
+# prefetched ahead of its load is not read a second time by the load itself.
+_read: set[tuple[str, int, float]] = set()
 
 
 def checkpoint_dir(name_or_path: str) -> Path | None:
@@ -109,13 +112,18 @@ def read_range(path: Path, offset: int, length: int, block: int) -> int:
   return done
 
 
+def file_key(path: Path) -> tuple[str, int, float]:
+  stat = path.stat()
+  return str(path.resolve()), stat.st_size, stat.st_mtime
+
+
 def prefetch(name_or_path: str, log=print) -> dict[str, Any] | None:
   """Warm the page cache for name_or_path's checkpoint files. Returns what it
   did, or None when it did nothing."""
   mode = os.getenv("OPEN_RL_PREFETCH", "auto").lower()
   if mode == "off":
     return None
-  files = checkpoint_files(name_or_path)
+  files = [p for p in checkpoint_files(name_or_path) if file_key(p) not in _read]
   if not files:
     return None
   total = sum(p.stat().st_size for p in files)
@@ -138,5 +146,6 @@ def prefetch(name_or_path: str, log=print) -> dict[str, Any] | None:
   with ThreadPoolExecutor(max_workers=threads) as pool:
     read = sum(pool.map(lambda t: read_range(t[0], t[1], t[2], block), tasks))
   seconds = time.time() - started
+  _read.update(file_key(p) for p in files)
   log(f"[prefetch] done: {read / 2**30:.2f} GiB in {seconds:.1f} s ({read / 2**20 / max(seconds, 1e-6):.0f} MiB/s)")
   return {"files": len(files), "bytes": read, "seconds": round(seconds, 2), "fs": kind, "threads": threads, "started_at": started}
