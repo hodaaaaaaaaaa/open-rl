@@ -1,6 +1,7 @@
 """File validation and integration with the installed vLLM weight loader."""
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +11,7 @@ from unittest.mock import patch
 import torch
 from safetensors.torch import save_file
 
-from server.delta_weight_transfer_engine import DeltaSnapshotWeightTransferEngine, read_sparse_patches, read_weight_metadata
+from server.delta_weight_transfer_engine import DeltaSnapshotWeightTransferEngine, read_into_page_cache, read_sparse_patches, read_weight_metadata
 
 
 def write_delta(path, names=None, shapes=None, tensors=None, **metadata):
@@ -71,6 +72,29 @@ class PatchFileTest(unittest.TestCase):
       path = Path(directory)
       write_delta(path, names=[], shapes=[], tensors={})
       self.assertEqual(read_sparse_patches(path, read_weight_metadata(path)), [])
+
+
+class ReadIntoPageCacheTest(unittest.TestCase):
+  def test_reads_every_byte_once(self):
+    with tempfile.TemporaryDirectory() as directory:
+      files = [Path(directory) / name for name in ("a", "b", "empty")]
+      files[0].write_bytes(bytes(range(50)))
+      files[1].write_bytes(bytes(5))
+      files[2].write_bytes(b"")
+      reads = []
+      real_pread = os.pread
+
+      def recording_pread(fd, length, offset):
+        data = real_pread(fd, length, offset)
+        reads.append((os.fstat(fd).st_size, offset, len(data)))
+        return data
+
+      with patch("server.delta_weight_transfer_engine.os.pread", side_effect=recording_pread):
+        read_into_page_cache(files, threads=3, block=7)
+      for size in (50, 5):
+        covered = sorted(byte for file_size, offset, length in reads if file_size == size for byte in range(offset, offset + length))
+        self.assertEqual(covered, list(range(size)))
+      self.assertTrue(all(length <= 7 for _, _, length in reads))
 
 
 class PackedModel(torch.nn.Module):
