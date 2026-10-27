@@ -9,7 +9,7 @@ import signal
 import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from itertools import groupby
+from itertools import count, groupby
 from typing import Any
 
 from opentelemetry import propagate, trace
@@ -63,6 +63,8 @@ def engine_kwargs_from_env(fft_enabled: bool) -> dict[str, Any]:
   if fft_enabled:
     engine_kwargs["weight_transfer_config"] = WeightTransferConfig(backend="delta_snapshot")
   else:
+    # Lets the sampler serve each job's step in arrival order (see JobOrder).
+    engine_kwargs["scheduling_policy"] = "priority"
     engine_kwargs["max_loras"] = int(os.getenv("VLLM_MAX_LORAS", "8"))
     engine_kwargs["max_lora_rank"] = int(os.getenv("VLLM_MAX_LORA_RANK", "64"))
   return engine_kwargs
@@ -145,7 +147,7 @@ class Sampler:
       raise
     self.weights_path = weights_path
 
-  async def generate(self, request: dict[str, Any]) -> dict[str, Any]:
+  async def generate(self, request: dict[str, Any], priority: int = 0) -> dict[str, Any]:
     request_id = request["request_id"]
     prompt_token_ids = request.get("prompt_token_ids", [])
     max_tokens = request.get("max_tokens", 20)
@@ -165,7 +167,11 @@ class Sampler:
     )
 
     results_generator = self.engine.generate(
-      prompt={"prompt_token_ids": prompt_token_ids}, sampling_params=sampling_params, request_id=request_id, lora_request=lora_request
+      prompt={"prompt_token_ids": prompt_token_ids},
+      sampling_params=sampling_params,
+      request_id=request_id,
+      lora_request=lora_request,
+      priority=priority,
     )
 
     final_output = None
@@ -266,17 +272,54 @@ async def fail_dead_engine(store: RequestStore, tasks: dict[asyncio.Task, dict[s
   raise RuntimeError("vLLM engine is dead")
 
 
-def start_requests(sampler: Sampler, store: RequestStore, requests: list[dict[str, Any]], in_flight: dict[asyncio.Task, dict[str, Any]]) -> None:
+class JobOrder:
+  """Engine priorities that serve a shared sampler's jobs one step at a time, in arrival order.
+
+  A job's requests that arrive while others of its are still running take
+  that job's turn; a job with nothing running starts a new turn behind the
+  existing ones. Without this the engine interleaves every job's requests and
+  they all finish together, so the shared trainer gets its first job late and
+  then serves the rest one after another.
+  """
+
+  def __init__(self) -> None:
+    self.turns = count()
+    self.jobs: dict[str, list[int]] = {}  # job -> [turn, requests running]
+
+  def start(self, job: str) -> int:
+    entry = self.jobs.setdefault(job, [next(self.turns), 0])
+    entry[1] += 1
+    return entry[0]
+
+  def finish(self, job: str) -> None:
+    entry = self.jobs.get(job)
+    if entry is not None:
+      entry[1] -= 1
+      if entry[1] <= 0:
+        del self.jobs[job]
+
+
+def start_requests(
+  sampler: Sampler,
+  store: RequestStore,
+  requests: list[dict[str, Any]],
+  in_flight: dict[asyncio.Task, dict[str, Any]],
+  order: JobOrder | None = None,
+) -> None:
   """Serve requests without waiting for the ones already running, so a request
   that arrives mid-batch joins the engine's running batch instead of queueing
   behind it. Only for samplers that never swap whole-model weights."""
   for request in requests:
-    task = asyncio.create_task(process_request(sampler, store, request))
+    job = request.get("lora_id") or ""
+    priority = order.start(job) if order is not None else 0
+    task = asyncio.create_task(process_request(sampler, store, request, priority))
     in_flight[task] = request
-    task.add_done_callback(lambda done: finished(done, in_flight))
+    task.add_done_callback(lambda done, job=job: finished(done, in_flight, order, job))
 
 
-def finished(task: asyncio.Task, in_flight: dict[asyncio.Task, dict[str, Any]]) -> None:
+def finished(task: asyncio.Task, in_flight: dict[asyncio.Task, dict[str, Any]], order: JobOrder | None = None, job: str = "") -> None:
+  if order is not None:
+    order.finish(job)
   request = in_flight.pop(task, None)
   if not task.cancelled() and task.exception() is not None and request is not None:
     print(f"[vLLM Worker] Could not answer request {request['request_id']}: {task.exception()}")
@@ -291,10 +334,10 @@ async def fail_requests(store: RequestStore, requests: list[dict[str, Any]], err
       print(f"[vLLM Worker] Could not fail request {request['request_id']}: {exc}")
 
 
-async def process_request(sampler: Sampler, store: RequestStore, request: dict[str, Any]) -> None:
+async def process_request(sampler: Sampler, store: RequestStore, request: dict[str, Any], priority: int = 0) -> None:
   with tracer.start_as_current_span("process_sampling_request", context=propagate.extract(request.get("trace_context", {}))):
     try:
-      result = await sampler.generate(request)
+      result = await sampler.generate(request, priority)
       result["type"] = "sample"
     except Exception as exc:
       result = failed_response(f"vLLM Worker Error: {exc}")
@@ -327,6 +370,7 @@ async def serve(
       await sampler.sleep()  # give the memory back before releasing the slot
   state = get_state_store()
   in_flight: dict[asyncio.Task, dict[str, Any]] = {}
+  order = JobOrder() if continuous else None
   try:
     try:
       ready_at = float("-inf")
@@ -349,7 +393,7 @@ async def serve(
           requests = [req for req in batch if req.get("request_id") != SHUTDOWN_SENTINEL]
           if requests and continuous:
             started = True
-            start_requests(sampler, store, requests, in_flight)
+            start_requests(sampler, store, requests, in_flight, order)
           elif requests:
             async with holding_gpu(time_slicer, workload, sampler):
               started = True
