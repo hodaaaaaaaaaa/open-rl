@@ -1,0 +1,6 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+reviews:
+  auto_review:
+    # The default branch is always reviewed; list other long-lived base branches here.
+    base_branches:
+      - feat/tpu
