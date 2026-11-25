@@ -16,7 +16,7 @@ Start the API server and trainer in one process, sampling with torch:
 
 ```bash
 BASE_MODEL=google/gemma-4-e2b \
-uv run --extra cpu python -m uvicorn server.api_server:app --host 127.0.0.1 --port 9003
+uv run --extra cpu python -m uvicorn server.api_server:app --host 127.0.0.1 --port 23500
 ```
 
 Because `REDIS_URL` is unset, the API server runs the trainer loop in its own
@@ -32,7 +32,7 @@ BASE_MODEL=google/gemma-4-e2b \
 VLLM_ARCHITECTURE_OVERRIDE=Gemma4ForCausalLM \
 TRAINER_CUDA_VISIBLE_DEVICES=0 \
 SAMPLER_CUDA_VISIBLE_DEVICES=1 \
-uv run --extra gpu python -m uvicorn server.api_server:app --host 127.0.0.1 --port 9003
+uv run --extra gpu python -m uvicorn server.api_server:app --host 127.0.0.1 --port 23500
 ```
 
 The equivalent Makefile shortcuts are:
@@ -88,7 +88,7 @@ backend by default for physical checkpoint/restore.
 
 | Env var | Default | What it does |
 | --- | --- | --- |
-| `TINKER_BASE_URL` | `http://127.0.0.1:9003` | Base URL used by example clients and scripts. |
+| `TINKER_BASE_URL` | `http://127.0.0.1:23500` | Base URL used by example clients and scripts. |
 | `TINKER_API_KEY` | `tml-dummy-key` | Passed through to the Tinker SDK. Local OpenRL does not enforce auth. |
 | `HF_TOKEN` | unset | Required for gated Hugging Face models. `uv run hf auth login` is the easiest setup path. |
 | `ENABLE_GCP_TRACE` | `0` | `1` exports OpenTelemetry traces to Google Cloud Trace. |
@@ -123,6 +123,20 @@ for. On one machine every pool has one replica, in process. See
 | `OPEN_RL_DISPATCH_CONCURRENCY` | `256` | Requests one pool keeps in flight. |
 | `OPEN_RL_SAMPLE_DEADLINE_SECONDS` | `3600` | How long a sampling request waits for a result before it fails. Set it on the API server. Worker pods and pool dispatchers get the same value. |
 | `OPEN_RL_DISPATCHER_IMAGE` | the worker image | Image for each pool's dispatcher container. The release sets it to the API-server image, which carries the dispatcher without the GPU stack and pulls in seconds. |
+
+## Default ports
+
+OpenRL uses ports in the unallocated `23500–23509` range for its traffic between nodes. Other ports keep their usual values.
+
+| Port | Component |
+| --- | --- |
+| `23500` | API server (`open-rl-api-server-service` Service, container, and local default) |
+| `23501` | Sampling pool `vllm serve` HTTP endpoint on sampler pods, reached from the pool's dispatcher pod |
+
+Sampling pools keep the sampler port they were created with. Before upgrading
+a cluster from a release that served samplers on port `8000`, finish active
+runs and delete their Workloads and sampling pools, so that every pool is
+created again on the new port.
 
 ## Inspection API
 

@@ -3,13 +3,13 @@
 import json
 import os
 
-from server.vllm_options import serve_args
+from server.vllm_options import SAMPLER_PORT, serve_args
 
 
 def main() -> None:
   base_model = os.environ["BASE_MODEL"]
   # The pool's EPP subscribes to these events at llm-d's default port and topic prefix; the topic names the pod and the served model.
-  topic = f"kv@{os.environ['POD_IP']}:8000@{base_model}"
+  topic = f"kv@{os.environ['POD_IP']}:{SAMPLER_PORT}@{base_model}"
   kv_events = {"enable_kv_cache_events": True, "publisher": "zmq", "endpoint": "tcp://*:5557", "topic": topic}
   args = serve_args(base_model, os.environ.get("OPEN_RL_FINE_TUNING_TYPE") == "lora")
   os.execvp("vllm", ["vllm", "serve", *args, "--kv-events-config", json.dumps(kv_events)])

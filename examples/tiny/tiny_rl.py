@@ -1,7 +1,7 @@
 """Tiny RL smoke test: sample from the current policy, reward completions that
 contain the target answer, and run a few importance-sampling policy-gradient steps.
 
-  uv --project examples run python examples/tiny/tiny_rl.py base_url=http://127.0.0.1:9003
+  uv --project examples run python examples/tiny/tiny_rl.py base_url=http://127.0.0.1:23500
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import chz
 import tinker
 from tinker import types
 
-BASE_URL = "http://127.0.0.1:9003"
+BASE_URL = "http://127.0.0.1:23500"
 
 os.environ.setdefault("TINKER_API_KEY", "tml-dummy-key")
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")

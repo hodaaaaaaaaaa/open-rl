@@ -38,7 +38,7 @@ from server.estimator import Footprint, footprint
 from server.lora_snapshots import snapshot_root
 from server.sampling_dispatcher import revision_file, tmp_root
 from server.store import get_state_store
-from server.vllm_options import ENGINE_ENV
+from server.vllm_options import ENGINE_ENV, SAMPLER_PORT
 from server.worker_manager import (
   FAILED,
   READY,
@@ -242,7 +242,7 @@ def pod_template(worker: Worker) -> dict[str, Any]:
       ]
     probe = (
       "import json, sys, urllib.request\n"
-      'version = json.load(urllib.request.urlopen("http://127.0.0.1:8000/weight_info", timeout=1))["weight_version"]\n'
+      f'version = json.load(urllib.request.urlopen("http://127.0.0.1:{SAMPLER_PORT}/weight_info", timeout=1))["weight_version"]\n'
       f"sys.exit(version != open({str(revision_file(worker.pool))!r}).read())"
     )
     container["readinessProbe"] = {"exec": {"command": ["/app/.venv/bin/python", "-c", probe]}, "periodSeconds": 2, "timeoutSeconds": 2}
@@ -292,7 +292,8 @@ def dispatcher_body(pool: str, owner: str) -> dict[str, Any]:
     "name": "epp",
     "image": EPP_IMAGE,
     "args": [
-      *("--endpoint-selector", f"app.kubernetes.io/component=sampler,app.kubernetes.io/instance={pool}", "--endpoint-target-ports", "8000"),
+      *("--endpoint-selector", f"app.kubernetes.io/component=sampler,app.kubernetes.io/instance={pool}"),
+      *("--endpoint-target-ports", str(SAMPLER_PORT)),
       *("--config-file", f"{ROUTER_CONFIG}/epp.yaml", "--metrics-endpoint-auth=false"),
     ],
     "env": [downward("POD_NAME", "metadata.name"), downward("NAMESPACE", "metadata.namespace")],
@@ -332,7 +333,7 @@ def network_policy_body(pool: str, owner: str) -> dict[str, Any]:
     "spec": {
       "podSelector": {"matchLabels": pool_labels("sampler", pool)},
       "policyTypes": ["Ingress"],
-      "ingress": [{"from": [{"podSelector": {"matchLabels": pool_labels("dispatcher", pool)}}], "ports": [{"port": 8000}, {"port": 5557}]}],
+      "ingress": [{"from": [{"podSelector": {"matchLabels": pool_labels("dispatcher", pool)}}], "ports": [{"port": SAMPLER_PORT}, {"port": 5557}]}],
     },
   }
 

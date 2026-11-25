@@ -38,7 +38,7 @@ from utils.rewards import (
   score_eval_prediction,
 )
 
-BASE_URL = "http://127.0.0.1:9003"
+BASE_URL = "http://127.0.0.1:23500"
 DATASET = "philschmid/gretel-synthetic-text-to-sql"
 LOG_DIR = Path(__file__).resolve().parent / "artifacts" / "texttosql_sft_grpo_{preset}"
 

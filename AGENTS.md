@@ -62,7 +62,7 @@ make test
 E2E tests boot up a client harness and run actual SFT/RL training workflows against the Open-RL backend.
 
 ### Option A: Running In-Cluster via Kubernetes (`Preferred`)
-When testing against a Kubernetes GPU cluster (e.g., GKE), the preferred and most reliable way to execute E2E integration benchmarks is using the `make cluster-e2e` target. This deploys an in-cluster client job (`open-rl-e2e-client`) that communicates directly with `open-rl-api-server-service:8000`:
+When testing against a Kubernetes GPU cluster (e.g., GKE), the preferred and most reliable way to execute E2E integration benchmarks is using the `make cluster-e2e` target. This deploys an in-cluster client job (`open-rl-e2e-client`) that communicates directly with `open-rl-api-server-service:23500`:
 
 ```bash
 make cluster-e2e IMAGE_TAG=$(cat VERSION 2>/dev/null || echo latest) \
@@ -96,8 +96,8 @@ make perf-compare PERF_BEFORE=api-server=<img>,worker=<img> PERF_AFTER=api-serve
 ### Option B: Local Port-Forward Execution (`Alternative / Local Dev`)
 If running a client script on a local machine against a remote Kubernetes cluster, use port-forwarding:
 ```bash
-pkill -9 -f port-forward 2>/dev/null; nohup sh -c 'while true; do kubectl port-forward svc/open-rl-api-server-service 8000:8000 >/dev/null 2>&1; sleep 1; done' >/dev/null 2>&1 &
-make test e2e <scenario_name> BASE_URL=http://127.0.0.1:8000
+pkill -9 -f port-forward 2>/dev/null; nohup sh -c 'while true; do kubectl port-forward svc/open-rl-api-server-service 23500:23500 >/dev/null 2>&1; sleep 1; done' >/dev/null 2>&1 &
+make test e2e <scenario_name> BASE_URL=http://127.0.0.1:23500
 ```
 
 ### Supported Scenarios:

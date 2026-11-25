@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.ERROR)
 
 
 def get_server_url():
-  return os.environ.get("BASE_URL", "http://localhost:9003")
+  return os.environ.get("BASE_URL", "http://localhost:23500")
 
 
 def list_adapters(args):

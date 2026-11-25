@@ -958,7 +958,7 @@
       </div>
       <div class="codeslide">
         <pre class="term"><span class="k">import</span> tinker
-svc = tinker.ServiceClient(base_url=<span class="s">"http://openrl.my-cluster:8000"</span>)
+svc = tinker.ServiceClient(base_url=<span class="s">"http://openrl.my-cluster:23500"</span>)
 trainer = <span class="k">await</span> svc.create_lora_training_client_async(
     base_model=<span class="s">"Qwen/Qwen3-4B-Instruct-2507"</span>, rank=16)
 
@@ -1153,7 +1153,7 @@ trainer = <span class="k">await</span> svc.create_lora_training_client_async(
           <pre><span class="k">import</span> tinker
 <span class="c"># your cluster, not Tinker's cloud</span>
 svc = tinker.ServiceClient(
-    base_url=<span class="hl">"http://openrl.my-cluster:8000"</span>,
+    base_url=<span class="hl">"http://openrl.my-cluster:23500"</span>,
     user_metadata={<span class="s">"openrl.fine_tuning_type"</span>: <span class="s">"full"</span>})
 <span class="c"># the SDK has one client type; the setting above makes it full fine-tuning</span>
 trainer = <span class="k">await</span> svc.create_lora_training_client_async(

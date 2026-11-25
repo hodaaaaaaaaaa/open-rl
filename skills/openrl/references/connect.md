@@ -4,13 +4,13 @@
 
 | From | URL |
 |---|---|
-| A laptop | `kubectl -n openrl-system port-forward svc/open-rl-api-server-service 9003:8000` in a loop, then `http://127.0.0.1:9003` |
-| A pod in the cluster | `http://open-rl-api-server-service.openrl-system.svc.cluster.local:8000` |
+| A laptop | `kubectl -n openrl-system port-forward svc/open-rl-api-server-service 23500:23500` in a loop, then `http://127.0.0.1:23500` |
+| A pod in the cluster | `http://open-rl-api-server-service.openrl-system.svc.cluster.local:23500` |
 
 A port-forward loop that survives server restarts:
 
 ```bash
-while true; do kubectl -n openrl-system port-forward svc/open-rl-api-server-service 9003:8000; sleep 1; done
+while true; do kubectl -n openrl-system port-forward svc/open-rl-api-server-service 23500:23500; sleep 1; done
 ```
 
 The SDK reads `TINKER_BASE_URL`, or pass `base_url=` to `tinker.ServiceClient`. The server
@@ -20,7 +20,7 @@ start without one.
 ## Which server you are talking to
 
 ```bash
-curl -s http://127.0.0.1:9003/api/v1/get_server_capabilities | python3 -m json.tool
+curl -s http://127.0.0.1:23500/api/v1/get_server_capabilities | python3 -m json.tool
 ```
 
 The `openrl` object holds `version` (the release tag, or `sha-<commit>` for a build from

@@ -181,14 +181,14 @@ To pin a release, replace `latest/download` with `download/<tag>`, for example
 Forward the API server to your machine and leave this running:
 
 ```bash
-kubectl -n openrl-system port-forward svc/open-rl-api-server-service 9003:8000
+kubectl -n openrl-system port-forward svc/open-rl-api-server-service 23500:23500
 ```
 
 In another terminal, check that the API server answers:
 
 ```bash
-curl http://127.0.0.1:9003/api/v1/healthz
-curl http://127.0.0.1:9003/api/v1/get_server_capabilities
+curl http://127.0.0.1:23500/api/v1/healthz
+curl http://127.0.0.1:23500/api/v1/get_server_capabilities
 ```
 
 The `openrl` section of the second response names the release, how the
@@ -245,7 +245,7 @@ How to install them depends on the agent:
   ```
   The cookbook skills then answer to `/tinker:research` and `/tinker:debug`.
 
-The examples talk to `http://127.0.0.1:9003` by default.
+The examples talk to `http://127.0.0.1:23500` by default.
 
 ## 4. Supervised fine-tuning
 
@@ -330,7 +330,7 @@ Any Tinker SDK client works against OpenRL, so the larger examples carry over:
 - **A step hangs before the first loss line.** The cluster is starting a
   worker. Ask the server about the model from another shell: the examples
   print the model id and the command right after `create_model`, and for
-  any client `curl http://127.0.0.1:9003/api/v1/openrl/models/<model_id>`
+  any client `curl http://127.0.0.1:23500/api/v1/openrl/models/<model_id>`
   shows the model's workers, each with a `state` and a `detail`, without
   `kubectl`. `kubectl -n openrl-system get workloads` shows the whole
   cluster. A Workload stuck with `NoCapacity` means no labeled node has a

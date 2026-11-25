@@ -16,7 +16,7 @@ Start the server:
 
 ```bash
 BASE_MODEL="google/gemma-3-1b-pt" \
-  uv run uvicorn server.api_server:app --host 0.0.0.0 --port 9003
+  uv run uvicorn server.api_server:app --host 0.0.0.0 --port 23500
 ```
 
 Then write your training loop with the Tinker SDK — 4 API primitives are all you need:
@@ -25,7 +25,7 @@ Then write your training loop with the Tinker SDK — 4 API primitives are all y
 import tinker
 from tinker import types
 
-client = tinker.ServiceClient(base_url="http://localhost:8000")
+client = tinker.ServiceClient(base_url="http://localhost:23500")
 
 # 1. Create a LoRA adapter on the base model
 trainer = await client.create_lora_training_client_async(base_model="google/gemma-3-1b-pt", rank=32)
@@ -68,16 +68,17 @@ Here's the key insight: **your client code doesn't change.** The Tinker API abst
 # Deploy to GKE
 kubectl apply --server-side -f https://github.com/openrl-dev/openrl/releases/latest/download/openrl-lora.yaml
 
+# Stop the local server first: it holds port 23500
 # Port-forward to your local machine
-kubectl -n openrl-system port-forward svc/open-rl-api-server-service 8000:8000
+kubectl -n openrl-system port-forward svc/open-rl-api-server-service 23500:23500
 ```
 
-Your training script still points at `localhost:8000` — but now the requests flow to the OpenRL API server on your cluster, which starts trainer and sampler workers on GPU nodes as you create models. The [GKE Deployment Guide](../setup/gke-setup.md) covers creating the cluster.
+Your training script still points at `localhost:23500` — but now the requests flow to the OpenRL API server on your cluster, which starts trainer and sampler workers on GPU nodes as you create models. The [GKE Deployment Guide](../setup/gke-setup.md) covers creating the cluster.
 
 To run the Text-to-SQL client against GKE, use the `gemma4_e2b` preset and point it to your port-forwarded URL:
 
 ```bash
-uv run client/texttosql_sft.py gemma4_e2b --base_url http://localhost:8000
+uv run client/texttosql_sft.py gemma4_e2b --base_url http://localhost:23500
 ```
 
 <p align="center">

@@ -38,7 +38,7 @@ whose default renderer is hardcoded for a different family, such as
 
 These recipes need a GPU deployment of OpenRL. On Kubernetes, follow the
 [GKE setup guide](../../docs/setup/gke-setup.md) and port-forward the API server
-to `127.0.0.1:9003`.
+to `127.0.0.1:23500`.
 
 For development on a machine with two GPUs, start Redis and run the API server
 from the repository root. It launches the trainer and the vLLM sampler as
@@ -62,7 +62,7 @@ OpenRL does not yet implement full Tinker-compatible durable checkpoint manageme
 ```bash
 cd examples
 TINKER_API_KEY=tml-dummy-key uv run python -m tinker_cookbook.recipes.sl_loop \
-  base_url=http://127.0.0.1:9003 \
+  base_url=http://127.0.0.1:23500 \
   model_name="Qwen/Qwen3-4B-Instruct-2507" \
   log_path=artifacts/tinker-cookbook/sl_loop \
   save_every=0
@@ -76,7 +76,7 @@ TINKER_API_KEY=tml-dummy-key uv run python -m tinker_cookbook.recipes.sl_loop \
 
 ```bash
 cd examples
-TINKER_API_KEY=tml-dummy-key TINKER_BASE_URL=http://127.0.0.1:9003 TINKER_TELEMETRY=0 uv run python -m tinker_cookbook.recipes.preference.shorter.train \
+TINKER_API_KEY=tml-dummy-key TINKER_BASE_URL=http://127.0.0.1:23500 TINKER_TELEMETRY=0 uv run python -m tinker_cookbook.recipes.preference.shorter.train \
   model_name="Qwen/Qwen3-4B-Instruct-2507" \
   batch_size=4 \
   group_size=4 \

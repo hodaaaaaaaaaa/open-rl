@@ -82,7 +82,7 @@ Run `make help` to see the available targets and their default knobs.
 ### Running the server locally
 
 ```bash
-make server                                   # one process on CPU, google/gemma-4-e2b, port 9003
+make server                                   # one process on CPU, google/gemma-4-e2b, port 23500
 REDIS_URL=redis://127.0.0.1:6379/0 make server  # trainer and vLLM sampler workers on GPUs (needs redis-server)
 ```
 

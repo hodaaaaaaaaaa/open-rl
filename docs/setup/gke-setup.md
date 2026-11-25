@@ -174,17 +174,17 @@ kubectl -n openrl-system get workloads,resourceclaims,pods
 To access the API server from your local machine:
 
 ```bash
-kubectl -n openrl-system port-forward svc/open-rl-api-server-service 9003:8000
+kubectl -n openrl-system port-forward svc/open-rl-api-server-service 23500:23500
 ```
 
 Smoke test:
 
 ```bash
-curl http://127.0.0.1:9003/api/v1/healthz
-curl http://127.0.0.1:9003/api/v1/get_server_capabilities
+curl http://127.0.0.1:23500/api/v1/healthz
+curl http://127.0.0.1:23500/api/v1/get_server_capabilities
 ```
 
-The OpenRL server is now available at `http://127.0.0.1:9003`.
+The OpenRL server is now available at `http://127.0.0.1:23500`.
 
 ## 5. Clean Up
 

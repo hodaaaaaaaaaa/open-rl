@@ -85,7 +85,7 @@ Clients (SDKs, CLI tools, or curl scripts) pass optional HTTP headers using the 
 
 ```http
 POST /v1/fine_tuning/jobs HTTP/1.1
-Host: open-rl-api-server:8000
+Host: open-rl-api-server:23500
 Content-Type: application/json
 x-open-rl-weight-sync-strategy: delta
 x-open-rl-weight-sync-delta-format: vllm_fused

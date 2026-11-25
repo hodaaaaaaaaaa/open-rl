@@ -30,7 +30,7 @@ returned rows.
 From `examples`:
 
 ```bash
-export TINKER_BASE_URL=http://127.0.0.1:9003
+export TINKER_BASE_URL=http://127.0.0.1:23500
 export BASE_MODEL=google/gemma-4-e2b
 
 uv run python -m run_attempt \
@@ -81,9 +81,9 @@ The text-SQL overlay sets:
 
 - `RECIPE=recipes/text_sql/autoresearch.toml`
 - `LOG_ROOT=/mnt/shared/open-rl/autoresearch/text_sql`
-- `TINKER_BASE_URL=http://open-rl-api-server-service.openrl-system:8000`
+- `TINKER_BASE_URL=http://open-rl-api-server-service.openrl-system:23500`
 - `BASE_MODEL=google/gemma-4-e2b`
-- `READY_URLS=http://open-rl-api-server-service.openrl-system:8000/api/v1/get_server_capabilities`
+- `READY_URLS=http://open-rl-api-server-service.openrl-system:23500/api/v1/get_server_capabilities`
 - `ATTEMPT_TIMEOUT_MINUTES=30`
 - `AGENT_TIMEOUT_MINUTES=10`
 

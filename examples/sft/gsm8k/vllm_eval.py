@@ -24,7 +24,7 @@ def main() -> None:
   parser = argparse.ArgumentParser()
   parser.add_argument("--path", required=True, action="append", help="One or more URI paths to evaluate concurrently")
   parser.add_argument("--base-model", default="Qwen/Qwen2.5-0.5B")
-  parser.add_argument("--base-url", default=os.getenv("TINKER_BASE_URL", os.getenv("BASE_URL", "http://127.0.0.1:8000")))
+  parser.add_argument("--base-url", default=os.getenv("TINKER_BASE_URL", os.getenv("BASE_URL", "http://127.0.0.1:23500")))
   parser.add_argument("--data", default="gsm8k_test.json")
   parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
   parser.add_argument("--microbatch-size", type=int, default=10, help="Number of evaluation problems to dispatch per micro-batch")

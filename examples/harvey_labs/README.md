@@ -46,7 +46,7 @@ Then point the grader at a judge; see [Choose a judge](#choose-a-judge).
 Check the OpenRL API server before a long run:
 
 ```bash
-uv run openrl-doctor --base-url http://127.0.0.1:9003
+uv run openrl-doctor --base-url http://127.0.0.1:23500
 ```
 
 ## Choose a judge
@@ -97,14 +97,14 @@ across runs you compare. Before a long run, check that the judge answers:
 
 ## Train
 
-Forward local port 9003 to the OpenRL API server with
-`kubectl -n openrl-system port-forward svc/open-rl-api-server-service 9003:8000`,
+Forward local port 23500 to the OpenRL API server with
+`kubectl -n openrl-system port-forward svc/open-rl-api-server-service 23500:23500`,
 then start training:
 
 ```bash
 export TINKER_API_KEY=tml-dummy-key   # OpenRL ignores it; the tinker client requires one
 export TINKER_TAGS=openrl.trainer_backend=automodel,openrl.trainer_device_count=4,openrl.trainer_cp=4,openrl.sampler_replicas=4
-uv run harvey-train base_url=http://127.0.0.1:9003 log_path=artifacts/harvey-labs/my-run
+uv run harvey-train base_url=http://127.0.0.1:23500 log_path=artifacts/harvey-labs/my-run
 ```
 
 By default `max_trajectory_tokens` is the model's full context window, read
@@ -193,7 +193,7 @@ that checkpoint, or omit `checkpoint` to evaluate the base model:
 
 ```bash
 uv run harvey-eval \
-  base_url=http://127.0.0.1:9003 \
+  base_url=http://127.0.0.1:23500 \
   checkpoint=tinker://MODEL/sampler_weights/LABEL \
   log_path=artifacts/harvey-labs/eval
 ```
@@ -288,7 +288,7 @@ it pinned by digest:
 ```bash
 kubectl -n ate-env port-forward svc/ate-env-api 7777:7777 &
 export SUBSTRATE_ENV_AUTH_TOKEN="$(kubectl -n ate-env get secret ate-env-api-token -o jsonpath='{.data.token}' | base64 -d)"
-uv run --extra substrate harvey-train base_url=http://127.0.0.1:9003 \
+uv run --extra substrate harvey-train base_url=http://127.0.0.1:23500 \
   sandbox_substrate_endpoint=127.0.0.1:7777 \
   sandbox_substrate_image=<registry>/lab-sandbox@sha256:<digest>
 ```
@@ -308,7 +308,7 @@ Pass a custom factory to the Python training or evaluation API:
 from harvey_labs.train import RunConfig, run
 from my_backend import sandbox_factory
 
-await run(RunConfig(base_url="http://127.0.0.1:9003"), sandbox_factory=sandbox_factory)
+await run(RunConfig(base_url="http://127.0.0.1:23500"), sandbox_factory=sandbox_factory)
 ```
 
 Training and evaluation share the same factory interface. Each call receives a
@@ -334,7 +334,7 @@ To verify the end-to-end setup on one 80 GB GPU per worker role, train on a
 single task with a smaller context window:
 
 ```bash
-uv run harvey-train base_url=http://127.0.0.1:9003 \
+uv run harvey-train base_url=http://127.0.0.1:23500 \
   task=<area>/<task> batch_size=1 rollouts_per_example=4 max_steps=2 \
   max_trajectory_tokens=81920 max_tokens=16384 max_tool_result_tokens=4096 \
   log_path=artifacts/harvey-labs/smoke

@@ -38,7 +38,7 @@ flow.
 From `examples`, with an OpenRL API server reachable on a port:
 
 ```bash
-export TINKER_BASE_URL=http://127.0.0.1:9003
+export TINKER_BASE_URL=http://127.0.0.1:23500
 uv run --no-sync --package open-rl-client python -m run_attempt \
   recipe=recipes/math_rl/autoresearch.toml \
   researcher=local-math \
@@ -99,7 +99,7 @@ so that attempt also waits for the model to load.
 The researcher pods reach the API server by its cross-namespace service name:
 
 ```text
-TINKER_BASE_URL=http://open-rl-api-server-service.openrl-system:8000
+TINKER_BASE_URL=http://open-rl-api-server-service.openrl-system:23500
 ```
 
 ## Overlay Settings
@@ -110,8 +110,8 @@ The math-RL overlay sets:
 - `LOG_ROOT=/mnt/shared/open-rl/autoresearch/math_rl`
 - `ATTEMPT_TIMEOUT_MINUTES=5`
 - `AGENT_TIMEOUT_MINUTES=10`
-- `READY_URLS=http://open-rl-api-server-service.openrl-system:8000/api/v1/healthz`
-- `TINKER_BASE_URL=http://open-rl-api-server-service.openrl-system:8000`
+- `READY_URLS=http://open-rl-api-server-service.openrl-system:23500/api/v1/healthz`
+- `TINKER_BASE_URL=http://open-rl-api-server-service.openrl-system:23500`
 - `BASE_MODEL=Qwen/Qwen2.5-0.5B-Instruct` in the composed GKE stack
 
 The recipe `program.md` tells each researcher sandbox to tune `config.toml`, run

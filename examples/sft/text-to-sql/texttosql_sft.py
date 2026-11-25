@@ -17,7 +17,7 @@ from datasets import load_dataset
 from tinker import types
 from tinker_cookbook.utils import ml_log
 
-BASE_URL = "http://127.0.0.1:9003"
+BASE_URL = "http://127.0.0.1:23500"
 DATASET = "philschmid/gretel-synthetic-text-to-sql"
 LOG_DIR = Path(__file__).resolve().parent / "artifacts" / "texttosql_{preset}"
 MAX_SEQ_LENGTH = 512

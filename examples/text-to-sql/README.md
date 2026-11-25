@@ -77,7 +77,7 @@ You can copy and paste these into your training terminal before proceeding.
 
 ```bash
 # OpenRL API server URL
-export TINKER_BASE_URL=http://127.0.0.1:9003
+export TINKER_BASE_URL=http://127.0.0.1:23500
 
 # Dummy API key for local API server
 export TINKER_API_KEY=tml-dummy

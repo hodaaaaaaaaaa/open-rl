@@ -36,7 +36,7 @@ spec:
         args:
         - "scenario=E2E-SCENARIO"
         - "uv_extra=cpu"
-        - "base_url=http://open-rl-api-server-service:8000"
+        - "base_url=http://open-rl-api-server-service:23500"
         - "log_dir=/mnt/shared/open-rl/runs/E2E-SCENARIO"
         - "E2E-EXTRA-ARGS"
         env:

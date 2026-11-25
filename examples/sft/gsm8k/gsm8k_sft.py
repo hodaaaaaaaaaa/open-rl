@@ -48,7 +48,7 @@ class GSM8KDataset(SupervisedDatasetBuilder):
 @chz.chz
 class Config:
   base_model: str = "Qwen/Qwen2.5-0.5B"
-  base_url: str = os.getenv("TINKER_BASE_URL", os.getenv("BASE_URL", "http://127.0.0.1:9003"))
+  base_url: str = os.getenv("TINKER_BASE_URL", os.getenv("BASE_URL", "http://127.0.0.1:23500"))
   log_path: str = str(Path(__file__).with_name("artifacts") / "gsm8k_sft")
   epochs: int = 1
   batch: int = 16

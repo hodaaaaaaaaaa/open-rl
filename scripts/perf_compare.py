@@ -95,7 +95,7 @@ def job_manifest(job: Job, run: str, steps: int, pvc: str, namespace: str) -> di
   args = {
     "scenario": job.scenario,
     "uv_extra": "cpu",
-    "base_url": "http://open-rl-api-server-service:8000",
+    "base_url": "http://open-rl-api-server-service:23500",
     "base_model": job.model,
     "steps": steps,
     "group_size": 8,

@@ -61,7 +61,7 @@ spec:
             fieldRef:
               fieldPath: metadata.namespace
         - name: API_SERVER_URL
-          value: http://open-rl-api-server-service:8000
+          value: http://open-rl-api-server-service:23500
         # The client image the sweep's Jobs run; an overlay points it at its own build.
         - name: CLIENT_IMAGE
           value: ghcr.io/openrl-dev/openrl/client:latest

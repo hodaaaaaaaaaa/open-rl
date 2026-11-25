@@ -152,7 +152,10 @@ def engine_args(is_lora: bool, sleep_mode: bool = False) -> dict[str, Any]:
   return args
 
 
-def serve_args(base_model: str, is_lora: bool, port: int = 8000) -> list[str]:
+SAMPLER_PORT = 23501
+
+
+def serve_args(base_model: str, is_lora: bool, port: int = SAMPLER_PORT) -> list[str]:
   """`vllm serve` flags for a sampling pool replica, computed on the replica's pod."""
   args = [base_model, "--port", str(port), "--api-server-count", "1", "--enable-scale-out"]
   for name, value in engine_args(is_lora).items():

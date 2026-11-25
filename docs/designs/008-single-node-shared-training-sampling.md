@@ -270,7 +270,7 @@ For local dev without Kubernetes (`OPEN_RL_WORKER_MANAGER=subprocess`), the setu
    export OPEN_RL_ACCEL_TIMESLICER_PORT="9753"
    export CUDA_VISIBLE_DEVICES="0"
 
-   uv run uvicorn server.api_server:app --host 0.0.0.0 --port 8000
+   uv run uvicorn server.api_server:app --host 0.0.0.0 --port 23500
    ```
 
 ---
@@ -295,7 +295,7 @@ dev-single-node: ## Run local single-node time-slicer & API server in dev mode
 	 OPEN_RL_ACCEL_TIMESLICER_HOST="127.0.0.1" \
 	 OPEN_RL_ACCEL_TIMESLICER_PORT="9753" \
 	 CUDA_VISIBLE_DEVICES=0 \
-	 uv run uvicorn server.api_server:app --host 0.0.0.0 --port 8000
+	 uv run uvicorn server.api_server:app --host 0.0.0.0 --port 23500
 ```
 
 ### 7.2 Validation Checklist

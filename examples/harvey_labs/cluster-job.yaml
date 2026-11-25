@@ -27,7 +27,7 @@ spec:
           # Your build of examples/harvey_labs/Dockerfile.
           image: us-central1-docker.pkg.dev/open-rl-2-sandbox-102433/open-rl/harvey-labs-client:latest
           args:
-            - base_url=http://open-rl-api-server-service.openrl-system.svc:8000
+            - base_url=http://open-rl-api-server-service.openrl-system.svc:23500
             - sandbox_warmpool=lab-sandbox
             - log_path=/mnt/shared/harvey-labs/$(RUN)
             # Qwen3.5-9B's full context window, the recipe default. The gateway's

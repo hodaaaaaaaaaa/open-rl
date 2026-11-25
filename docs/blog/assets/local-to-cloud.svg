@@ -43,7 +43,7 @@
 
   <rect x="66" y="264" width="123" height="36" rx="7" fill="#eff6ff" stroke="#93c5fd" stroke-width="0.8"/>
   <text x="128" y="278" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="7" font-weight="600" fill="#2563eb">Same code locally:</text>
-  <text x="128" y="292" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, monospace" font-size="6.5" fill="#64748b">base_url=":8000"</text>
+  <text x="128" y="292" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, monospace" font-size="6.5" fill="#64748b">base_url=":23500"</text>
 
   <rect x="66" y="308" width="123" height="36" rx="7" fill="#f8fafc"/>
   <text x="128" y="322" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="7" fill="#94a3b8">Tinker SDK handles</text>
@@ -59,7 +59,7 @@
   <text x="290" y="126" font-family="ui-monospace, SFMono-Regular, monospace" font-size="7" fill="#2563eb">open-rl-api-server</text>
 
 
-  <text x="264" y="148" font-family="ui-sans-serif, system-ui, sans-serif" font-size="8" font-weight="600" fill="#64748b">FastAPI :8000</text>
+  <text x="264" y="148" font-family="ui-sans-serif, system-ui, sans-serif" font-size="8" font-weight="600" fill="#64748b">FastAPI :23500</text>
   <rect x="264" y="156" width="135" height="14" rx="4" fill="#eff6ff" stroke="#93c5fd" stroke-width="0.6"/>
   <text x="332" y="166" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, monospace" font-size="6" fill="#2563eb">/api/v1/forward_backward</text>
   <rect x="264" y="174" width="135" height="14" rx="4" fill="#eff6ff" stroke="#93c5fd" stroke-width="0.6"/>
@@ -240,7 +240,7 @@
   <rect x="680" y="370" width="570" height="12" fill="#fffbeb"/>
   <text x="694" y="376" font-family="ui-sans-serif, system-ui, sans-serif" font-size="7" font-weight="700" fill="#a16207" letter-spacing="0.03em">POD</text>
   <text x="720" y="376" font-family="ui-monospace, SFMono-Regular, monospace" font-size="7" fill="#a16207">vllm-worker</text>
-  <text x="860" y="376" font-family="ui-sans-serif, system-ui, sans-serif" font-size="6.5" fill="#94a3b8">GPU: nvidia-l4  ·  port 8001  ·  inference only  ·  active at eval steps</text>
+  <text x="860" y="376" font-family="ui-sans-serif, system-ui, sans-serif" font-size="6.5" fill="#94a3b8">GPU: nvidia-l4  ·  port 23501  ·  inference only  ·  active at eval steps</text>
 
   <!-- Prompt and response side by side -->
   <rect x="694" y="390" width="250" height="26" rx="6" fill="#fffbeb" stroke="#fcd34d" stroke-width="0.6"/>

@@ -199,10 +199,10 @@ CUDA_VISIBLE_DEVICES=$API_SERVER_DEV $QUEUE_ENV FLA_TILELANG=$FLA_TILELANG BASE_
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 OPEN_RL_TRAIN_TOKEN_BUDGET=$CONTEXT OPEN_RL_ACTIVATION_CPU_OFFLOAD=1 \
 OPEN_RL_LOG_CUDA_MEMORY=1 \
-uv run --extra gpu --extra vllm --extra fastpath python -m uvicorn server.api_server:app --host 127.0.0.1 --port 9003 |& tee -a $LOGS/api-server.log"
+uv run --extra gpu --extra vllm --extra fastpath python -m uvicorn server.api_server:app --host 127.0.0.1 --port 23500 |& tee -a $LOGS/api-server.log"
 
 TRAIN_CMD="TINKER_API_KEY=tml-dummy $JUDGE_ENV uv --project examples run python examples/harvey_labs/train.py \
-model_name=$MODEL_NAME renderer_name=qwen3_5 base_url=http://127.0.0.1:9003 \
+model_name=$MODEL_NAME renderer_name=qwen3_5 base_url=http://127.0.0.1:23500 \
 learning_rate=2e-4 lora_rank=32 \
 batch_size=$BATCH_SIZE rollouts_per_example=$ROLLOUTS max_steps=20 eval_every=5 \
 task_set=$TASK_SET judge_model=$JUDGE_MODEL \
@@ -211,7 +211,7 @@ log_path=artifacts/harvey-labs/$RUN_LABEL"
 
 EVAL_CMD="TINKER_API_KEY=tml-dummy $JUDGE_ENV uv --project examples run python examples/harvey_labs/eval_checkpoint.py \
 checkpoint=/tmp/open-rl/peft/CHANGE-ME/final model_name=$MODEL_NAME renderer_name=qwen3_5 \
-base_url=http://127.0.0.1:9003 task_set=$TASK_SET judge_model=$JUDGE_MODEL \
+base_url=http://127.0.0.1:23500 task_set=$TASK_SET judge_model=$JUDGE_MODEL \
 max_tokens=$GEN_TOKENS max_trajectory_tokens=$CONTEXT max_tool_result_tokens=$GEN_TOKENS"
 
 # set-option needs a running tmux server, so the session must exist first.

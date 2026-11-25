@@ -38,8 +38,8 @@ following cookbook advice about API keys, model choice, checkpoints or
 
 | | |
 |---|---|
-| Endpoint from a laptop | `kubectl -n openrl-system port-forward svc/open-rl-api-server-service 9003:8000`, then `http://127.0.0.1:9003`. Run it in a loop; it drops on server restarts (see runbook). |
-| Endpoint in the cluster | `http://open-rl-api-server-service.openrl-system.svc.cluster.local:8000` |
+| Endpoint from a laptop | `kubectl -n openrl-system port-forward svc/open-rl-api-server-service 23500:23500`, then `http://127.0.0.1:23500`. Run it in a loop; it drops on server restarts (see runbook). |
+| Endpoint in the cluster | `http://open-rl-api-server-service.openrl-system.svc.cluster.local:23500` |
 | Auth | None. The SDK insists on a key: `TINKER_API_KEY=tml-dummy-key`. |
 | Is it up, which release | `GET /api/v1/healthz`; `GET /api/v1/get_server_capabilities` -> `openrl.version`, `openrl.worker_launcher`, `openrl.fft_enabled`, `openrl.settings_schema_url` |
 | What is my run doing | `GET /api/v1/openrl/models/<model_id>`: the model's workers, each with a `state` (`waiting_for_placement`, `starting`, `ready`, `failed`, `stopped`) and a human-readable `detail`; whether its session is live; a one-line `summary`. The model id is `trainer.model_id`. Before you have one, or for the whole cluster, only `kubectl -n openrl-system get workloads` (needs cluster access). |

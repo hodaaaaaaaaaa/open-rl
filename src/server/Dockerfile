@@ -122,9 +122,9 @@ ENV PATH="/app/.venv/bin:/usr/local/cuda/bin:$PATH" \
     # LD_LIBRARY_PATH, silently leaving torch/vLLM CPU-only on GKE.
     LD_LIBRARY_PATH="/usr/local/nvidia/lib64:/usr/local/nvidia/lib:$LD_LIBRARY_PATH"
 
-# Expose ports (API server: 8000, vLLM Worker: 8001)
-EXPOSE 8000
-EXPOSE 8001
+# Expose ports (API server: 23500, vLLM Sampler: 23501)
+EXPOSE 23500
+EXPOSE 23501
 
 # Start the API server using uv run to ensure the venv is active
-CMD ["uv", "run", "uvicorn", "server.api_server:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "uvicorn", "server.api_server:app", "--host", "0.0.0.0", "--port", "23500"]

@@ -1,6 +1,6 @@
 """Check an OpenRL deployment from the client's side, in under a minute, without a GPU.
 
-  uv --project examples run openrl-doctor [--base-url http://127.0.0.1:9003] [--train]
+  uv --project examples run openrl-doctor [--base-url http://127.0.0.1:23500] [--train]
 
 Each check prints one line: OK, WARN or FAIL, then what was found. Exit code
 is 1 if any check failed. --train runs a 3-step tiny_sft round trip and times
@@ -24,7 +24,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-DEFAULT_BASE_URL = os.getenv("TINKER_BASE_URL", os.getenv("BASE_URL", "http://127.0.0.1:9003"))
+DEFAULT_BASE_URL = os.getenv("TINKER_BASE_URL", os.getenv("BASE_URL", "http://127.0.0.1:23500"))
 
 
 class Report:

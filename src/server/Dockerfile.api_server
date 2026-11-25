@@ -43,7 +43,7 @@ ENV PYTHONPATH="/app/src:/app:$PYTHONPATH"
 ARG OPEN_RL_VERSION=dev
 ENV OPEN_RL_VERSION=${OPEN_RL_VERSION}
 
-EXPOSE 8000
+EXPOSE 23500
 
 # Start the API server
-CMD ["uv", "run", "uvicorn", "server.api_server:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "uvicorn", "server.api_server:app", "--host", "0.0.0.0", "--port", "23500"]

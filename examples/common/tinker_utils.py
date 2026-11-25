@@ -11,7 +11,7 @@ from rich.console import Console
 from tinker_cookbook.rl.types import EnvGroupBuilder, RLDataset
 from tinker_cookbook.utils import ml_log
 
-DEFAULT_BASE_URL = "http://localhost:9003"
+DEFAULT_BASE_URL = "http://localhost:23500"
 
 
 def force_rich_log_colors() -> None:

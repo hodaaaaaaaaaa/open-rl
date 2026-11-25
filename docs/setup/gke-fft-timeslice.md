@@ -298,8 +298,8 @@ The Kustomize rollout includes `k8s/deploy/dcgm`, deploying the NVIDIA DCGM Expo
 ## Setup 3: Run training on the cluster
 
 ```bash
-kubectl port-forward svc/open-rl-api-server-service 9003:8000 &
-make test e2e fft-gsm8k BASE_URL=http://127.0.0.1:9003
+kubectl port-forward svc/open-rl-api-server-service 23500:23500 &
+make test e2e fft-gsm8k BASE_URL=http://127.0.0.1:23500
 ```
 
 ## Troubleshooting

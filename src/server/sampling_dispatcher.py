@@ -20,7 +20,7 @@ import redis.asyncio as redis
 
 from server.sampling_store import SamplingStore, accepted_at, job_of
 from server.telemetry import serving, set_phase
-from server.vllm_options import sample_params, sample_result
+from server.vllm_options import SAMPLER_PORT, sample_params, sample_result
 
 logger = logging.getLogger(__name__)
 
@@ -335,7 +335,7 @@ class HttpSampler:
     selector = f"app.kubernetes.io/component=sampler,app.kubernetes.io/instance={self.pool}"
     namespace = os.getenv("OPEN_RL_WORKER_NAMESPACE", "openrl-system")
     pods = await asyncio.to_thread(self.k8s.list_namespaced_pod, namespace, label_selector=selector, _request_timeout=10)
-    return [f"http://{p.status.pod_ip}:8000" for p in pods.items if p.status.pod_ip and p.status.phase == "Running"]
+    return [f"http://{p.status.pod_ip}:{SAMPLER_PORT}" for p in pods.items if p.status.pod_ip and p.status.phase == "Running"]
 
   async def weight_version(self, url: str) -> str:
     return (await self.http.get(f"{url}/weight_info", timeout=WEIGHT_INFO_TIMEOUT_SECONDS)).raise_for_status().json()["weight_version"]

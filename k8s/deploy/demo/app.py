@@ -25,7 +25,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from kubernetes import client, config
 
 NAMESPACE = os.getenv("POD_NAMESPACE", "openrl-system")
-API_SERVER = os.getenv("API_SERVER_URL", "http://open-rl-api-server-service:8000").rstrip("/")
+API_SERVER = os.getenv("API_SERVER_URL", "http://open-rl-api-server-service:23500").rstrip("/")
 CLIENT_IMAGE = os.getenv("CLIENT_IMAGE", "ghcr.io/openrl-dev/openrl/client:latest")
 CLUSTER_NAME = os.getenv("CLUSTER_NAME", "")  # shown on the Fleet tab; the page falls back to the namespace
 PVC = os.getenv("SHARED_PVC", "open-rl-shared-pvc")

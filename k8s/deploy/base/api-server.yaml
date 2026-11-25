@@ -8,8 +8,8 @@ spec:
   selector:
     app: open-rl-api-server
   ports:
-  - port: 8000
-    targetPort: 8000
+  - port: 23500
+    targetPort: 23500
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -34,9 +34,9 @@ spec:
       - name: api-server
         image: ghcr.io/openrl-dev/openrl/api-server:latest
         imagePullPolicy: IfNotPresent
-        command: ["uv", "run", "uvicorn", "server.api_server:app", "--host", "0.0.0.0", "--port", "8000"]
+        command: ["uv", "run", "uvicorn", "server.api_server:app", "--host", "0.0.0.0", "--port", "23500"]
         ports:
-        - containerPort: 8000
+        - containerPort: 23500
         env:
         - name: ENABLE_GCP_TRACE
           valueFrom:
@@ -86,7 +86,7 @@ spec:
         readinessProbe:
           httpGet:
             path: /api/v1/healthz
-            port: 8000
+            port: 23500
           initialDelaySeconds: 5
           periodSeconds: 10
           timeoutSeconds: 5

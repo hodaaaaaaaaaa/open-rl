@@ -92,6 +92,6 @@ export SAMPLER_CUDA_VISIBLE_DEVICES=1
 make server
 ```
 
-The OpenRL server is now available at `http://127.0.0.1:9003`. Worker logs are
+The OpenRL server is now available at `http://127.0.0.1:23500`. Worker logs are
 written to `$OPEN_RL_TMP_DIR` (default `/tmp`) as `trainer_<model>.log` and
 `sampler_<model>.log`.

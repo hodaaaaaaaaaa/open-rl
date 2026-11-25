@@ -15,7 +15,7 @@ import tinker
 from tinker import types
 
 BASE_MODEL = "Qwen/Qwen3-0.6B"
-BASE_URL = "http://127.0.0.1:9003"
+BASE_URL = "http://127.0.0.1:23500"
 PLOT_PATH = Path(__file__).resolve().parent / "artifacts" / "piglatin_{preset}_metrics.png"
 
 PAIRS_PATH = Path(__file__).resolve().parent / "piglatin_data.json"

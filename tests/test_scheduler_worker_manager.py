@@ -539,6 +539,14 @@ class SchedulerWorkerManagerTest(unittest.TestCase):
         self.assertEqual(commands, {f"lora-{owner}-0-sampler": serve, f"lora-{owner}-1-sampler": serve})
         pools = {w["metadata"]["labels"]["app.kubernetes.io/instance"] for w in api.created}
         self.assertEqual([name for kind, name in k8s.objects if kind == "deployment"], list(pools))
+        (pool,) = pools
+        dep = k8s.objects[("deployment", pool)]
+        epp = next(c for c in dep["spec"]["template"]["spec"]["containers"] if c["name"] == "epp")
+        self.assertIn("23501", epp["args"])
+        netpol = k8s.objects[("network_policy", pool)]
+        self.assertEqual(netpol["spec"]["ingress"][0]["ports"], [{"port": 23501}, {"port": 5557}])
+        probe_cmd = api.created[0]["spec"]["template"]["spec"]["containers"][0]["readinessProbe"]["exec"]["command"][-1]
+        self.assertIn("http://127.0.0.1:23501/weight_info", probe_cmd)
 
   def test_base_models_that_clean_to_one_name_get_workers_of_their_own(self) -> None:
     long = "org/" + "m" * 70

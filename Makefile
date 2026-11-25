@@ -16,7 +16,7 @@ SAMPLING_BACKEND ?=
 # The network interface to bind the API server
 HOST           ?= 127.0.0.1
 # The local port number for the API server
-PORT           ?= 9003
+PORT           ?= 23500
 # The fully qualified base URL used by local CLI tools and clients
 BASE_URL       ?= http://$(HOST):$(PORT)
 UNIT_TESTS ?= tests.test_session_lifecycle tests.test_proto_codec tests.test_forward_only tests.test_fft_batch_failure tests.test_api_server_paths tests.test_accel_timeslicer tests.test_trainer_optimizer_correctness tests.test_trainer_logprob_chunks tests.test_worker_manager tests.test_scheduler_worker_manager tests.test_estimator tests.test_redis_store tests.test_cluster_eval_script tests.test_perf_compare_script tests.test_delta_weight_sync tests.test_diffing_backends tests.test_sampler_weight_rotation tests.test_sampler_batch_limits tests.test_commands tests.test_weight_sync_config tests.test_exclusive_trainer tests.test_delete_model tests.test_automodel_worker tests.test_worker_thread_device tests.test_trainer_data_parallel tests.test_openrl_status tests.test_skill_docs tests.test_trainer_ready tests.test_sampling_store tests.test_lora_snapshots tests.test_lora_runtime_slots tests.test_prefetch tests.test_pool_accept tests.test_sampling_dispatcher tests.test_vllm_sampler tests.test_vllm_options tests.test_observability tests.test_telemetry
@@ -50,7 +50,7 @@ help:
 	@echo "REDIS_URL=redis://127.0.0.1:6379/0 make server  # trainer and vLLM sampler workers on GPUs (needs redis-server)"
 	@echo "make test                               # fast unit tests"
 	@echo "make test e2e tiny-lora|tiny-fft|tiny-rl|lora-textsql|fft-gsm8k|fft-gsm8k-x2|fft-textsql-rl|fft-textsql-rl-x2  # tiny-* = fast overfit smoke tests"
-	@echo "make test e2e tiny-lora BASE_URL=http://host:9003"
+	@echo "make test e2e tiny-lora BASE_URL=http://host:23500"
 	@echo "CUDA_VISIBLE_DEVICES=0 make test e2e tiny-fft"
 	@echo "make test e2e tiny-fft TRAINING_TEST_ARGS='steps=20'"
 	@echo "make test e2e fft-gsm8k TRAINING_TEST_ARGS='steps=10 eval_examples=8 extra=\"batch=2\"'"

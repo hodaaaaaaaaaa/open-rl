@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from server.vllm_options import cudagraph_capture_sizes, gpu_memory_utilization, serve_args, split_stop
+from server.vllm_options import SAMPLER_PORT, cudagraph_capture_sizes, gpu_memory_utilization, serve_args, split_stop
 
 
 class SplitStopTest(unittest.TestCase):
@@ -60,3 +60,8 @@ class ServeArgsTest(unittest.TestCase):
     args = serve_args("org/m", is_lora=True)
     self.assertIn("--no-enable-prefix-caching", args)
     self.assertFalse({"True", "False"} & set(args))
+
+  def test_default_sampler_port_is_in_openrl_range(self) -> None:
+    self.assertEqual(SAMPLER_PORT, 23501)
+    args = serve_args("org/m", is_lora=False)
+    self.assertEqual(args[:3], ["org/m", "--port", "23501"])

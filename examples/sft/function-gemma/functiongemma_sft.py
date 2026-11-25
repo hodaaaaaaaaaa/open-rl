@@ -15,7 +15,7 @@ from tinker import types
 from transformers.utils.chat_template_utils import get_json_schema
 
 BASE_MODEL = "google/functiongemma-270m-it"
-BASE_URL = "http://127.0.0.1:9003"
+BASE_URL = "http://127.0.0.1:23500"
 DATASET = "bebechien/SimpleToolCalling"
 PLOT_PATH = Path(__file__).resolve().parents[1] / "artifacts" / "functiongemma_sft_metrics.png"
 EVAL_MAX_TOKENS = 24
